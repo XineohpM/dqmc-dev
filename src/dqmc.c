@@ -56,7 +56,7 @@
 #define calciBd(iB, l) do { \
 	for (int i = 0; i < N; i++) { \
 		const int hsbit = hs[i + N*(l)]; \
-		/* Forward down-spin uses idx_fwd, inverse uses idx_inv */
+		/* Forward down-spin uses idx_fwd, inverse uses idx_inv */ \
 		const int idx_fwd = hsbit ^ (hs_channel == 0); \
 		const int idx_inv = idx_fwd ^ 1; \
 		const double el = exp_lambda[i + N*idx_inv]; \

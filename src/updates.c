@@ -22,8 +22,8 @@ void update_delayed(const int N, const int n_delay, const double *const restrict
 			* idx=0 -> exp(-lambda), idx=1 -> exp(+lambda)
 			* Up-spin always uses hsbit; down-spin flips hsbit only in spin-channel.
 		*/
-		const int idx_u = hs_idx(hsbit, 0, hs_channel)
-		const int idx_d = hs_idx(hsbit, 1, hs_channel)
+		const int idx_u = hsbit;
+		const int idx_d = hsbit ^ (hs_channel == 0);
 		const double delu = del[i + N*idx_u];
 		const double deld = del[i + N*idx_d];
 		if (delu == 0.0 && deld == 0.0) continue;
