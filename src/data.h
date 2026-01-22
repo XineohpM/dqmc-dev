@@ -34,6 +34,8 @@ struct params {
 	num *exp_Ku, *exp_Kd, *inv_exp_Ku, *inv_exp_Kd;
 	num *exp_halfKu, *exp_halfKd, *inv_exp_halfKu, *inv_exp_halfKd;
 	double *exp_lambda, *del;
+	// HS decoupling channel: 0 = spin-channel (down uses flipped HS bit), 1 = density-channel (down uses same HS bit)
+	int hs_channel;
 	int F, n_sweep;
 };
 

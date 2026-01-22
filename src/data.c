@@ -397,6 +397,16 @@ int sim_data_read_alloc(struct sim_data *sim) {
 	my_read(_int, "/params/meas_chiral", &sim->p.meas_chiral);
 	my_read(_int, "/params/checkpoint_every", &sim->p.checkpoint_every);
 
+	// HS decoupling channel (optional for backward compatibility):
+	// 0 = spin-channel, 1 = density-channel
+	if (H5Lexists(file_id, "/params/hs_channel", H5P_DEFAULT) > 0) {
+		my_read(_int, "/params/hs_channel", &sim->p.hs_channel);
+	} else {
+		// Default to spin-channel for older parameter files that do not include hs_channel
+		sim->p.hs_channel = 0;
+		fprintf(stderr, "Warning: /params/hs_channel not found in %s; defaulting hs_channel=0 (spin-channel)\n", sim->file);
+	}
+
 	const int N = sim->p.N, L = sim->p.L;
 	const int num_i = sim->p.num_i, num_ij = sim->p.num_ij;
 	const int num_plaq_accum = sim->p.num_plaq_accum;
