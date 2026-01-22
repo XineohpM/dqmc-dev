@@ -5,6 +5,7 @@
 #include "updates.h"
 
 void update_delayed(const int N, const int n_delay, const double *const restrict del,
+		const double *const restrict exp_lambda, const int hs_channel,
 		const int *const restrict site_order,
 		uint64_t *const restrict rng, int *const restrict hs,
 		num *const restrict gu, num *const restrict gd, num *const restrict phase,
@@ -16,12 +17,27 @@ void update_delayed(const int N, const int n_delay, const double *const restrict
 	for (int j = 0; j < N; j++) dd[j] = gd[j + N*j];
 	for (int ii = 0; ii < N; ii++) {
 		const int i = site_order[ii];
-		const double delu = del[i + N*hs[i]];
-		const double deld = del[i + N*!hs[i]];
+		const int hsbit = hs[i];
+		/* Index convention for exp_lambda/del second dimension:
+			* idx=0 -> exp(-lambda), idx=1 -> exp(+lambda)
+			* Up-spin always uses hsbit; down-spin flips hsbit only in spin-channel.
+		*/
+		const int idx_u = hs_idx(hsbit, 0, hs_channel)
+		const int idx_d = hs_idx(hsbit, 1, hs_channel)
+		const double delu = del[i + N*idx_u];
+		const double deld = del[i + N*idx_d];
 		if (delu == 0.0 && deld == 0.0) continue;
 		const num ru = 1.0 + (1.0 - du[i]) * delu;
 		const num rd = 1.0 + (1.0 - dd[i]) * deld;
-		const num prob = ru * rd;
+		num prob = ru * rd;
+		/* Density-channel HS decoupling couples to (n_up + n_dn - 1).
+			* -1 contributes a pure HS field factor whose flip ratio is exp(2*lambda*s).
+			* Using exp_lambda(idx_u) = exp(lambda*s), this ratio is exp_lambda^2.
+		*/
+		if (hs_channel == 1) {
+			const double el = exp_lambda[i + N * idx_u];
+			prob *= (num)(el * el);
+		}
 		const double absprob = fabs(prob);
 		if (rand_doub(rng) < absprob) {
 			#pragma omp parallel sections

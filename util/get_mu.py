@@ -18,7 +18,12 @@ def get_mu_n(path):
     if not mask.all():
         print(f"{path} incomplete: {mask.sum()}/{len(n_sample)}")
     sign, density = sign[mask], density[mask]
-    nj = util.jackknife(sign, density.sum(1))
+    dsum = density.sum(1)
+    valid = (np.isfinite(sign)) & (np.isfinite(dsum)) & (sign != 0)
+    sign = sign[valid]; density = density[valid]; dsum = dsum[valid]
+    if sign.size < 3:
+        return util.load_firstfile(path, "metadata/mu")[0], np.nan, np.nan
+    nj = util.jackknife(sign, dsum)
 
     return util.load_firstfile(path, "metadata/mu")[0], nj[0], nj[1]
 
@@ -38,6 +43,15 @@ def get_mu(targets, paths):
     data = np.array([get_mu_n(path) for path in paths])
     #sort rows by size of mu
     data = data[np.argsort(data[:, 0])]
+    # Drop rows with invalid density (NaN/Inf). This prevents polyfit/roots from
+    # receiving NaNs when some mu points had zero-sign bins filtered out upstream.
+    finite_mask = np.isfinite(data[:, 1])
+    if not np.all(finite_mask):
+        data = data[finite_mask]
+    if data.shape[0] < 3:
+        # Not enough valid points to fit a quadratic; bail out cleanly.
+        # Return NaNs for mus to signal "need more/other mu points".
+        return data, np.array([np.nan for _ in targets], dtype=float)
     
     mus = np.zeros(len(targets))
     for i in range(len(targets)):

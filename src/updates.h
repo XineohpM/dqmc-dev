@@ -3,7 +3,10 @@
 #include <stdint.h>
 #include "util.h"
 
-void update_delayed(const int N, const int n_delay, const double *const restrict del,
+void update_delayed(const int N, const int n_delay,
+		const double *const restrict del,
+		const double *const restrict exp_lambda,
+		const int hs_channel,
 		const int *const restrict site_order,
 		uint64_t *const restrict rng, int *const restrict hs,
 		num *const restrict Gu, num *const restrict Gd, num *const restrict phase,

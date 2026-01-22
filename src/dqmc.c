@@ -36,7 +36,10 @@
 
 #define calcBd(B, l) do { \
 	for (int j = 0; j < N; j++) { \
-		const double el = exp_lambda[j + N*!hs[j + N*(l)]]; \
+		const int hsbit = hs[j + N*(l)]; \
+		/* hs_channel: 0 -> spin channel（hsbit flipped); 1 -> density channel (hsbit not flipped) */ \
+		const int idx = hsbit ^ (hs_channel == 0); \
+		const double el = exp_lambda[j + N*idx]; \
 		for (int i = 0; i < N; i++) \
 			(B)[i + N*j] = exp_Kd[i + N*j] * el; \
 	} \
@@ -52,7 +55,11 @@
 
 #define calciBd(iB, l) do { \
 	for (int i = 0; i < N; i++) { \
-		const double el = exp_lambda[i + N*hs[i + N*(l)]]; \
+		const int hsbit = hs[i + N*(l)]; \
+		/* Forward down-spin uses idx_fwd, inverse uses idx_inv */
+		const int idx_fwd = hsbit ^ (hs_channel == 0); \
+		const int idx_inv = idx_fwd ^ 1; \
+		const double el = exp_lambda[i + N*idx_inv]; \
 		for (int j = 0; j < N; j++) \
 			(iB)[i + N*j] = el * inv_exp_Kd[i + N*j]; \
 	} \
@@ -99,6 +106,7 @@ static int dqmc(struct sim_data *sim) {
 	const num *const restrict inv_exp_halfKd = sim->p.inv_exp_halfKd;
 	const double *const restrict exp_lambda = sim->p.exp_lambda;
 	const double *const restrict del = sim->p.del;
+	const int hs_channel = sim->p.hs_channel;
 	uint64_t *const restrict rng = sim->s.rng;
 	int *const restrict hs = sim->s.hs;
 
@@ -247,7 +255,7 @@ static int dqmc(struct sim_data *sim) {
 		for (int l = 0; l < L; l++) {
 			profile_begin(updates);
 			shuffle(rng, N, site_order);
-			update_delayed(N, n_delay, del, site_order,
+			update_delayed(N, n_delay, del, exp_lambda, hs_channel, site_order,
 			               rng, hs + N*l, gu, gd, &phase,
 			               tmpNN1u, tmpNN2u, tmpN1u,
 			               tmpNN1d, tmpNN2d, tmpN1d);

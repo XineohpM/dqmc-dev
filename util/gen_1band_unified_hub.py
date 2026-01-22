@@ -276,6 +276,7 @@ def create_1(
     # Careful: tpp will add more bonds to transport or other measurements. These parts are not included in this code.
     # adding tpp, currently, the measurments are not enough to get whole bond-anything correlations.
     U: float = 6.0,
+    hs_channel: str = "auto",
     dt: float = 0.1,
     L: int = 40,
     nflux: int = 0,
@@ -317,6 +318,14 @@ def create_1(
     if init_rng is None:
         init_rng = gus.rand_seed_urandom()
     rng = init_rng.copy()
+
+    # Determine HS channel
+    # Convention: 0 -> spin channel (n_u - n_d); 1 -> density channel (n_u + n_d - 1)
+    if hs_channel not in {"auto", "spin", "density"}:
+        raise ValueError(f"Invalid hs_channel={hs_channel}. Use 'auto', 'spin' (for U >= 0) or 'density' (for U < 0).")
+    # Actual HS channel used
+    hs_channel_act = ("spin" if U >= 0 else "density") if hs_channel == "auto" else hs_channel
+    hs_channel_id = 0 if hs_channel_act == "spin" else 1
 
     Ncell = Nx * Ny
     Norb = Norb_per_cell_dict[geometry]
@@ -919,12 +928,7 @@ def create_1(
     exp_halfKd = expm(-dt / 2 * Kd)
     inv_exp_halfKd = expm(dt / 2 * Kd)
 
-    U_i = U * np.ones_like(degen_i, dtype=np.float64)
-    assert U_i.shape[0] == num_i
-
-    exp_lmbd = np.exp(0.5 * U_i * dt) + np.sqrt(np.expm1(U_i * dt))
-    exp_lambda = np.array((exp_lmbd[map_i] ** -1, exp_lmbd[map_i]))
-    delll = np.array((exp_lmbd[map_i] ** 2 - 1, exp_lmbd[map_i] ** -2 - 1))
+    U_i, exp_lambda, delll = gus.set_U(U, dt, num_i, map_i, degen_i)
 
     with h5py.File(file_params, "w" if overwrite else "x") as f:
         # parameters not used by dqmc code, but useful for analysis
@@ -941,6 +945,7 @@ def create_1(
         f["metadata"]["b2ps"] = b2ps
         f["metadata"]["plaq_per_cell"] = plaq_per_cell
         f["metadata"]["U"] = U
+        f["metadata"]["hs_channel"] = hs_channel_act
         f["metadata"]["t'"] = tp
         f["metadata"]["t''"] = tpp
         f["metadata"]["nflux"] = nflux
@@ -982,6 +987,7 @@ def create_1(
         f["params"]["Ku"] = Ku
         f["params"]["Kd"] = Kd
         f["params"]["U"] = U_i
+        f["params"]["hs_channel"] = np.array(hs_channel_id, dtype=np.int32)
         f["params"]["dt"] = np.array(dt, dtype=np.float64)  # not actually used
 
         # simulation parameters
@@ -1280,6 +1286,16 @@ if __name__ == "__main__":
         default=6.0,
         metavar="X",
         help="On-site Hubbard repulsion strength",
+    )
+    group1.add_argument(
+        "--hs_channel",
+        choices=["auto", "spin", "density"],
+        type=str,
+        default="auto",
+        help=(
+            "HS decoupling channel. 'spin' couples HS field with opposite signs for up/down; "
+            "'density' couples with the same sign for up/down; 'auto' chooses spin for U>=0 and density for U<0."
+        ),
     )
     group1.add_argument(
         "--bc",
