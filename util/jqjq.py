@@ -1,13 +1,21 @@
 import numpy as np
-import util
 import data_analysis as da
+import util
 
 # one-hop bond dx, dy
+# +x nn -> (dx, dy) = (1, 0), hopping = t
+# +y nn -> (dx, dy) = (0, 1), hopping = t
+# NE -> (dx, dy) = (1, 1), hopping = t'
+# NW -> (dx, dy) = (-1, 1), hopping = t'
 dx_arr = [1, 0, 1, -1]
 dy_arr = [0, 1, 1, 1]
 
 
 def get_sign(path: str) -> np.ndarray:
+    """
+    Get the value of the number of samples (n_sample) and accumulated sign (sign)
+    for completed bins.
+    """
     ns, s = util.load(path, "meas_uneqlt/n_sample", "meas_uneqlt/sign")
     # use only completed bins
     mask = ns == ns.max()
@@ -24,12 +32,13 @@ def get_component(path: str, name: str) -> np.ndarray:
         return correlator(Q=0) for maxent analysis. Not divided by sign
     """
 
+    # Read parameters from the first file
     Nx, Ny, bps, b2ps, N, L = util.load_firstfile(
         path,
         "metadata/Nx",
         "metadata/Ny",
-        "metadata/bps",
-        "metadata/b2ps",
+        "metadata/bps",  # number of one-hop bond type, [(1, 0) (0, 1) (1, 1) (1, -1)]
+        "metadata/b2ps", # number of two-hop bond type
         "params/N",
         "params/L",
     )
@@ -61,6 +70,8 @@ def get_component(path: str, name: str) -> np.ndarray:
     # use only completed bins
     mask = ns == ns.max()
     correlator = correlator[mask]
+    # Sum the correlator over Nx, Ny to get the q = 0 component
+    # C(q=0, tau) = Σ_{r} C(r, tau)
     # take q == 0, don't divide by sign
     correlator_q0 = correlator.sum((-1, -2))
 
@@ -75,8 +86,8 @@ def electrical_sum(path: str, jj_q0: np.ndarray) -> np.ndarray:
     Input is not divided by sign.
 
     Args:
-        path (str): [description]
-        jj_q0 (np.ndarray): [description]
+        path (str): pathname containing hdf5 files
+        jj_q0 (np.ndarray): q = 0 component of the current-current correlator
 
     Returns:
         np.ndarray: shape = (4, Nbin_complete, L)
@@ -129,6 +140,9 @@ def thermal_sum(path: str, q0_corrs) -> dict[str, np.ndarray]:
     Take tuple of correlators, each element of shape (Nbin_completed, L, b[2]ps, b[2]ps),
     Perform appropriate summation over bond types to obtain JNJN, JQJN, JNJQ, JQJQ
     Return a dictionary with named elements.
+
+    q0_corrs should include j2j2_q0, jj2_q0, j2j_q0, jnj2_q0, j2jn_q0, jjn_q0, jnj_q0, jnjn_q0, jj_q0
+
     E.g. result["JQJN"].shape = (4, Nbin_complete, L)
     Input is not divided by sign.
     """
