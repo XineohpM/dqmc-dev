@@ -1,4 +1,4 @@
-import os, sys, glob
+import os, sys, glob, re
 from pathlib import Path
 import numpy as np
 import argparse
@@ -7,6 +7,15 @@ import data_analysis as da
 utilpath = Path(__file__).resolve().parents[1]/"util"
 sys.path.insert(0, str(utilpath))
 import util
+
+def load_dt_from_genlog(dir):
+    genlog = os.path.join(dir, "gen.log")
+    with open(genlog, "r") as f:
+        text = f.read()
+    m = re.search(r"(?:^|\s)dt\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)", text)
+    if m is None:
+        raise ValueError(f"Could not find dt in {genlog}")
+    return float(m.group(1))
 
 def main():
     p = argparse.ArgumentParser()
@@ -23,7 +32,8 @@ def main():
     
     for relpath in args.relpath_list:
         dir = os.path.join(path, relpath, "")
-        dt, beta = util.load_firstfile(dir, "metadata/dt", "metadata/beta")
+        dt = load_dt_from_genlog(dir)
+        beta, = util.load_firstfile(dir, "metadata/beta")
         k, k_err = da.eqlt_meas_1(dir, ["kinetic"])
         corr = np.load(os.path.join(dir, args.correlator_name), allow_pickle=False)
 
@@ -44,6 +54,7 @@ def main():
             sym=True
         )
         norm = pre["norm"]
+        print("dt = ", dt)
 
         print("norm of correlator = ", norm)
         print("kinetic energy = ", k)
@@ -54,4 +65,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
