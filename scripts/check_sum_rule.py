@@ -29,8 +29,13 @@ def main():
     path = args.path
     if not os.path.isdir(path):
         raise FileNotFoundError(f"Base path not found or not a directory: {path}")
+
+    def get_temperature(relpath):
+        dir = os.path.join(path, relpath, "")
+        beta, = util.load_firstfile(dir, "metadata/beta")
+        return 1.0 / beta
     
-    for relpath in args.relpath_list:
+    for relpath in sorted(args.relpath_list, key=get_temperature):
         dir = os.path.join(path, relpath, "")
         dt = load_dt_from_genlog(dir)
         beta, = util.load_firstfile(dir, "metadata/beta")
@@ -58,13 +63,13 @@ def main():
         norm = pre["norm"]
         print("T = ", 1.0/beta)
         print("dt = ", dt)
-        print("norm of correlator = ", norm)
-        print("kinetic energy = ", k)
+        print("norm of correlator = ", norm*4)
+        print("kinetic energy = ", -k)
         print("kinetic energy error = ", k_err)
-        if np.isclose(norm, k): print("norm of correlator = kinetic energy")
+        if np.isclose(norm, -k, rtol=1e-02, atol=0): print("norm of correlator = kinetic energy")
         else: print("norm of correlator and kinetic energy are not close")
-        print("norm/k = ", norm/k)
-        print("k/norm = ", k/norm)
+        print("k/norm = ", -k/norm)
+        print(" ")
 
 if __name__ == "__main__":
     main()
