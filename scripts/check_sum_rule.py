@@ -22,7 +22,7 @@ def main():
         raise FileNotFoundError(f"Base path not found or not a directory: {path}")
     
     for relpath in args.relpath_list:
-        dir = os.path.join(path, relpath)
+        dir = os.path.join(path, relpath, "")
         dt, beta = util.load_firstfile(dir, "metadata/dt", "metadata/beta")
         k, k_err = da.eqlt_meas_1(dir, ["kinetic"])
         corr = np.load(os.path.join(dir, args.correlator_name), allow_pickle=False)
@@ -46,7 +46,7 @@ def main():
         norm = pre["norm"]
 
         print("norm of correlator = ", norm)
-        print("kinetic energy = ", norm)
+        print("kinetic energy = ", k)
         if np.isclose(norm, k): print("norm of correlator = kinetic energy")
         else: print("norm of correlator and kinetic energy are not close")
         print("norm/k = ", norm/k)
