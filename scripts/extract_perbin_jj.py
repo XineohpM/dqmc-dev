@@ -54,9 +54,9 @@ import glob
 import argparse
 import os, sys
 import numpy as np
-UTILDIR = os.environ.get("DQMC_UTIL_DIR", "/home/users/phoenixm/dqmc-dev/util")
-if os.path.isfile(os.path.join(UTILDIR, "jqjq.py")):
-    sys.path.insert(0, UTILDIR)
+from pathlib import Path
+utilpath = Path(__file__).resolve().parents[1]/"dqmc-dev"/"util"
+sys.path.insert(0, str(utilpath))
 import jqjq
 
 
