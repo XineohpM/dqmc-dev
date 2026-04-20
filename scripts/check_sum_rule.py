@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 import maxent
 import data_analysis as da
-utilpath = Path(__file__).resolve().parents[1]/"dqmc-dev"/"util"
+utilpath = Path(__file__).resolve().parents[1]/"util"
 sys.path.insert(0, str(utilpath))
 import util
 

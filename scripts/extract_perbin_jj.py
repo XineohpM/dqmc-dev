@@ -55,7 +55,7 @@ import argparse
 import os, sys
 import numpy as np
 from pathlib import Path
-utilpath = Path(__file__).resolve().parents[1]/"dqmc-dev"/"util"
+utilpath = Path(__file__).resolve().parents[1]/"util"
 sys.path.insert(0, str(utilpath))
 import jqjq
 
