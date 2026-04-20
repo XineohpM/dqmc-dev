@@ -12,7 +12,7 @@ def load_dt_from_genlog(dir):
     genlog = os.path.join(dir, "gen.log")
     with open(genlog, "r") as f:
         text = f.read()
-    m = re.search(r"(?:^|\s)dt\s*=\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)", text)
+    m = re.search(r"(?m)^dt\s+([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*$", text)
     if m is None:
         raise ValueError(f"Could not find dt in {genlog}")
     return float(m.group(1))
