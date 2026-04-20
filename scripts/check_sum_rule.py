@@ -35,6 +35,8 @@ def main():
         dt = load_dt_from_genlog(dir)
         beta, = util.load_firstfile(dir, "metadata/beta")
         k, k_err = da.eqlt_meas_1(dir, ["kinetic"])
+        k = k["kinetic"].real
+        k_err = k_err["kinetic"].real
         corr = np.load(os.path.join(dir, args.correlator_name), allow_pickle=False)
 
         # Generate a random grid, does not affect norm of corr
@@ -54,10 +56,11 @@ def main():
             sym=True
         )
         norm = pre["norm"]
+        print("T = ", 1.0/beta)
         print("dt = ", dt)
-
         print("norm of correlator = ", norm)
         print("kinetic energy = ", k)
+        print("kinetic energy error = ", k_err)
         if np.isclose(norm, k): print("norm of correlator = kinetic energy")
         else: print("norm of correlator and kinetic energy are not close")
         print("norm/k = ", norm/k)
