@@ -66,9 +66,9 @@ def main():
         print("norm of correlator = ", norm*4)
         print("kinetic energy = ", -k)
         print("kinetic energy error = ", k_err)
-        if np.isclose(norm, -k, rtol=1e-02, atol=0): print("norm of correlator = kinetic energy")
+        if np.isclose(norm*4, -k, rtol=1e-02, atol=0): print("norm of correlator = kinetic energy")
         else: print("norm of correlator and kinetic energy are not close")
-        print("k/norm = ", -k/norm)
+        print("k/norm = ", -k/norm/4)
         print(" ")
 
 if __name__ == "__main__":
