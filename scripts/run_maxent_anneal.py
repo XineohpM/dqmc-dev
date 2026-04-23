@@ -203,9 +203,11 @@ def main():
                     )
             elif args.lowT_gap is not None:
                 gap = float(args.lowT_gap)
-                ratio = 2e-4  # low-frequency floor relative to the high-frequency plateau
-                m_cont = np.ones_like(omega, dtype=float)
-                m_cont[omega < gap] = ratio
+                ratio = 5e-2
+                width = 0.2
+                x = (omega - gap) / width
+                sigmoid = 1.0 / (1.0 + np.exp(-x))
+                m_cont = ratio + (1.0 - ratio) * sigmoid
                 model = m_cont * domega
                 model /= model.sum()
             else:
