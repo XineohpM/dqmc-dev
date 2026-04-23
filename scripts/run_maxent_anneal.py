@@ -104,8 +104,12 @@ def main():
     p.set_defaults(sym=False)
     p.add_argument("--append", type=str,
                 help="Path to tau=beta column for nonsymmetric bosonic kernel, (N_bin, 1)")
-    p.add_argument("--highT_model", type=str,
+    model_g = p.add_mutually_exclusive_group()
+    model_g.add_argument("--highT_model", type=str,
                 help="Comma-separated spectral func array for annealing the highest T.")
+    model_g.add_argument("--lowT_gap", type=float,
+                help="If set, use gapped model for the lowest T and do inverse annealing." \
+                "Input the width of the gap.")
     p.add_argument("--method", choices=["classic", "bryan", "BT"], default="BT",
                 help="Alpha selection method, defualt BT.")
     p.add_argument("--output_relpath", type=str,
@@ -150,10 +154,22 @@ def main():
         T_arr.append(T)
         dpath_arr.append(dpath)
         #dt_arr.append(dt)
-        idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=True)
-        T_arr    = [T_arr[i] for i in idx]
-        dpath_arr = [dpath_arr[i] for i in idx]
-        #dt_arr   = [dt_arr[i] for i in idx]
+        if args.highT_model is not None:
+            idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=True)
+            T_arr    = [T_arr[i] for i in idx]
+            dpath_arr = [dpath_arr[i] for i in idx]
+            #dt_arr   = [dt_arr[i] for i in idx]
+        elif args.lowT_gap is not None:
+            idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=False)
+            T_arr    = [T_arr[i] for i in idx]
+            dpath_arr = [dpath_arr[i] for i in idx]
+            #dt_arr   = [dt_arr[i] for i in idx]
+        else:
+            print("Model not given. Using flat model for annealing from high T to low T.")
+            idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=True)
+            T_arr    = [T_arr[i] for i in idx]
+            dpath_arr = [dpath_arr[i] for i in idx]
+            #dt_arr   = [dt_arr[i] for i in idx]
 
     op_type = args.op_type
     sym = args.sym
@@ -179,14 +195,21 @@ def main():
         #dt = dt_arr[i]
         dpath = dpath_arr[i]
         if i == 0:
-            if args.highT_model is None:
-                model = None
-            else:
+            if args.highT_model is not None:
                 model = np.array([float(x) for x in args.highT_model.split(",") if x.strip()], dtype=float)
                 if model.shape != omega.shape:
                     raise ValueError(
                         f"--highT_model length {model.shape[0]} does not match omega grid length {omega.shape[0]}."
                     )
+            elif args.lowT_gap is not None:
+                gap = float(args.lowT_gap)
+                ratio = 2e-4  # low-frequency floor relative to the high-frequency plateau
+                m_cont = np.ones_like(omega, dtype=float)
+                m_cont[omega < gap] = ratio
+                model = m_cont * domega
+                model /= model.sum()
+            else:
+                model = None
         else:
             if prev_A is None:
                 raise RuntimeError("Previous temperature MaxEnt output A is missing; cannot anneal to the next temperature.")
