@@ -203,11 +203,8 @@ def main():
                     )
             elif args.lowT_gap is not None:
                 gap = float(args.lowT_gap)
-                ratio = 5e-2
-                width = 0.2
-                x = (omega - gap) / width
-                sigmoid = 1.0 / (1.0 + np.exp(-x))
-                m_cont = ratio + (1.0 - ratio) * sigmoid
+                power = 3.0
+                m_cont = 1.0 - np.exp(-(omega/gap)**power)
                 model = m_cont * domega
                 model /= model.sum()
             else:
