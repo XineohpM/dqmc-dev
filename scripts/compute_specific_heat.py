@@ -305,7 +305,8 @@ def main():
         raise SystemExit(f"No subdirs matching {subdir_pfx} under {path}.")
     tp = float(args.tp)
 
-    do_diff, do_fluc = False
+    do_diff = False
+    do_fluc = False
     if args.mode == "diff" or args.mode == "both": do_diff = True
     if args.mode == "fluc" or args.mode == "both": do_fluc = True
 
