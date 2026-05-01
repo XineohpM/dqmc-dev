@@ -83,7 +83,7 @@ def K(g00, Nx, Ny, tp=0):
     k2 = 2*tp*(g00[:,1,1] + g00[:,1,Ny-1] + g00[:,Nx-1,1]+ g00[:,Nx-1,Ny-1])
     return k1+k2
 
-def E(file, tp=0):
+def energy(file, tp=0):
     # Per-site energy
     density, sign, g00, nsamp, beta, U, Nx, Ny, N, double_occ = get_meas(file)
     e = V(U, double_occ) + K(g00, Nx, Ny, tp)
@@ -116,7 +116,7 @@ def diff(subdirs, tp):
             density, sign, g00, nsamp, beta, U, Nx, Ny, N, double_occ = get_meas(file)
             if not np.isclose(beta, beta_0):
                 raise ValueError(f"Inconsistent beta across bins in {file}: {beta} vs {beta_0}")
-            e = E(file, tp)
+            e = energy(file, tp)
             bins_E.append(e)
             bins_sign.append(sign)
             bins_nsamp.append(nsamp)
@@ -155,12 +155,12 @@ def diff(subdirs, tp):
         raise SystemExit("No valid temperature points found.")
 
     T = np.array(T_list, dtype=float)
-    E = np.array(E_mean_list, dtype=float)
+    E_mean = np.array(E_mean_list, dtype=float)
     E_err = np.array(E_err_list, dtype=float)
 
     order = np.argsort(T)
     T = T[order]
-    E = E[order]
+    E_mean = E_mean[order]
     E_err = E_err[order]
     E_bins_list = [E_bins_list[i] for i in order]
     sign_bins_list = [sign_bins_list[i] for i in order]
@@ -168,11 +168,11 @@ def diff(subdirs, tp):
 
     T_mid = 0.5 * (T[1:] + T[:-1])
     T_diff = T[1:] - T[:-1]
-    dE = E[1:] - E[:-1]
+    dE = E_mean[1:] - E_mean[:-1]
     dE_err = np.sqrt(E_err[1:]**2 + E_err[:-1]**2)
     C = dE / T_diff
     C_err = dE_err / np.abs(T_diff)
-    return T, T_mid, E, E_err, C, C_err
+    return T, T_mid, E_mean, E_err, C, C_err
 
 def fluc(subdirs, tp):
     T_list = []
