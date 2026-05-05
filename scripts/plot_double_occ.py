@@ -84,6 +84,7 @@ def get_meas_dir(dir: str):
     double_occ_arr = np.asarray(double_occ_list, dtype=float)
     sign_arr = np.asarray(sign_list, dtype=float)
     nsamp_arr = np.asarray(nsamp_list, dtype=float)
+    single_occ_arr = density_arr - 2.0 * double_occ_arr
 
     # Jackknife
     jk_double_occ = util.jackknife_noniid(nsamp_arr, sign_arr, double_occ_arr)
@@ -92,11 +93,14 @@ def get_meas_dir(dir: str):
     jk_density = util.jackknife_noniid(nsamp_arr, sign_arr, density_arr)
     density_mean = jk_density[0]
     density_err = jk_density[1]
+    jk_single_occ = util.jackknife_noniid(nsamp_arr, sign_arr, single_occ_arr)
+    single_occ_mean = jk_single_occ[0]
+    single_occ_err = jk_single_occ[1]
 
     if not np.isclose(density_mean, nt, atol=1e-2):
         raise ValueError(f"density mismatch in {dir}: measured density={density_mean}, target n={nt}")
     
-    return double_occ_mean, double_occ_err, nt, Tt
+    return double_occ_mean, double_occ_err, single_occ_mean, single_occ_err, nt, Tt
 
 
 def main():
@@ -121,55 +125,73 @@ def main():
         )
     results_by_n = {}
     for d in dirs:
-        double_occ_mean, double_occ_err, nt, Tt = get_meas_dir(d)
-        results_by_n.setdefault(nt, []).append([double_occ_mean, double_occ_err, Tt])
+        double_occ_mean, double_occ_err, single_occ_mean, single_occ_err, nt, Tt = get_meas_dir(d)
+        results_by_n.setdefault(nt, []).append([double_occ_mean, double_occ_err, 
+                                                single_occ_mean, single_occ_err, Tt])
 
     # Save per-n numpy arrays and plot one figure for each n.
     fig_overlay, ax_overlay = plt.subplots(figsize=(6.0, 4.5))
     color_cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
     for i, (nt, rows) in enumerate(sorted(results_by_n.items())):
-        rows = sorted(rows, key=lambda x: x[2])
+        rows = sorted(rows, key=lambda x: x[4])
         double_occ_arr = np.asarray([r[0] for r in rows], dtype=float)
         double_occ_err_arr = np.asarray([r[1] for r in rows], dtype=float)
-        T_arr = np.asarray([r[2] for r in rows], dtype=float)
+        single_occ_arr = np.asarray([r[2] for r in rows], dtype=float)
+        single_occ_err_arr = np.asarray([r[3] for r in rows], dtype=float)
+        T_arr = np.asarray([r[4] for r in rows], dtype=float)
 
         color = color_cycle[i % len(color_cycle)]
         n_label = f"n={nt:g}"
         n_tag = f"n{nt:g}"
 
         np.save(os.path.join(output_path, f"{args.out_prefix}_{n_tag}_T.npy"), T_arr)
-        np.save(os.path.join(output_path, f"{args.out_prefix}_{n_tag}_mean.npy"), double_occ_arr)
-        np.save(os.path.join(output_path, f"{args.out_prefix}_{n_tag}_err.npy"), double_occ_err_arr)
+        np.save(os.path.join(output_path, f"{args.out_prefix}_{n_tag}_double_occ_mean.npy"), double_occ_arr)
+        np.save(os.path.join(output_path, f"{args.out_prefix}_{n_tag}_double_occ_err.npy"), double_occ_err_arr)
+        np.save(os.path.join(output_path, f"{args.out_prefix}_{n_tag}_single_occ_mean.npy"), single_occ_arr)
+        np.save(os.path.join(output_path, f"{args.out_prefix}_{n_tag}_single_occ_err.npy"), single_occ_err_arr)
 
         fig, ax = plt.subplots(figsize=(6.0, 4.5))
         ax.errorbar(
             T_arr, double_occ_arr, yerr=double_occ_err_arr,
             fmt="o", ms=4, linestyle="-", capsize=2,
-            elinewidth=1.0, linewidth=1.2, color=color, label=n_label,
+            elinewidth=1.0, linewidth=1.2, color=color,
+            label=fr"{n_label}, double occ.",
+        )
+        ax.errorbar(
+            T_arr, single_occ_arr, yerr=single_occ_err_arr,
+            fmt="s", ms=4, linestyle="--", capsize=2,
+            elinewidth=1.0, linewidth=1.2, color=color,
+            label=fr"{n_label}, single occ.",
         )
         ax.set_xlabel("T")
-        ax.set_ylabel(r"$\langle n_{\uparrow} n_{\downarrow} \rangle$")
-        ax.set_title(f"Double occupancy vs T, {n_label}")
+        ax.set_ylabel("occupation probability")
         ax.grid(True, alpha=0.3)
         ax.legend(frameon=False)
         fig.tight_layout()
-        fig.savefig(os.path.join(output_path, f"{args.out_prefix}_{n_tag}.png"), dpi=200)
+        fig.savefig(os.path.join(output_path, f"{args.out_prefix}_{n_tag}_occ.png"), dpi=200)
         plt.close(fig)
 
         ax_overlay.errorbar(
             T_arr, double_occ_arr, yerr=double_occ_err_arr,
             fmt="o", ms=4, linestyle="-", capsize=2,
-            elinewidth=1.0, linewidth=1.2, color=color, label=n_label,
+            elinewidth=1.0, linewidth=1.2, color=color,
+            label=fr"{n_label}, double occ.",
+        )
+        ax_overlay.errorbar(
+            T_arr, single_occ_arr, yerr=single_occ_err_arr,
+            fmt="s", ms=4, linestyle="--", capsize=2,
+            elinewidth=1.0, linewidth=1.2, color=color,
+            label=fr"{n_label}, single occ.",
         )
 
     ax_overlay.set_xlabel("T")
-    ax_overlay.set_ylabel(r"$\langle n_{\uparrow} n_{\downarrow} \rangle$")
-    ax_overlay.set_title("Double occupancy vs T")
+    ax_overlay.set_ylabel("occupation probability")
+    #ax_overlay.set_title("Double occupancy vs T")
     ax_overlay.grid(True, alpha=0.3)
     ax_overlay.legend(frameon=False)
     fig_overlay.tight_layout()
-    fig_overlay.savefig(os.path.join(output_path, f"{args.out_prefix}_overlay.png"), dpi=200)
+    fig_overlay.savefig(os.path.join(output_path, f"{args.out_prefix}_occ_overlay.png"), dpi=200)
     plt.close(fig_overlay)
 
 if __name__ == "__main__":
