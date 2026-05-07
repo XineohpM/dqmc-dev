@@ -28,8 +28,17 @@ def parse_n_from_path(path):
 def parse_T_from_path(path):
     for part in Path(path).parts:
         m = re.match(r"T([0-9.eE+-]+)_beta", part)
+        n = re.match(r"T_([0-9.eE+-]+)", part)
+        p = re.match(r"beta([0-9.eE+-]+)", part)
+        q = re.match(r"beta_([0-9.eE+-]+)", part)
         if m:
             return float(m.group(1))
+        elif n:
+            return float(n.group(1))
+        elif p:
+            return 1.0/float(p.group(1))
+        elif q:
+            return 1.0/float(q.group(1))
     raise ValueError(f"Cannot parse T from path: {path}")
 
 def get_meas_file(file: str):
