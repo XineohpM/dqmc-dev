@@ -17,8 +17,11 @@ import util
 def parse_n_from_path(path):
     for part in Path(path).parts:
         m = re.fullmatch(r"n([0-9.]+)", part)
+        hf = re.fullmatch(r"half_filling", part)
         if m:
             return float(m.group(1))
+        elif hf:
+            return 1.0
     raise ValueError(f"Cannot parse n from path: {path}")
 
 
