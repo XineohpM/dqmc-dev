@@ -16,6 +16,7 @@ phoenixm@stanford.edu
 2.  Compute specific heat from energy fluctuation:
 
         C_v = (<E^2> - <E>^2) / T^2
+        (ref: https://doi.org/10.1103/PhysRevB.105.L161103)
 
     with equal time energy correlation measurements meas_eqlt/kk, meas_eqlt/kv, 
     meas_eqlt/vk and meas_eqlt/vv.
@@ -130,18 +131,9 @@ def diff(subdirs, tp):
             raise ValueError(f"Non-finite energy encountered in {d}")
         if np.any(~np.isfinite(bins_sign)):
             raise ValueError(f"Non-finite sign encountered in {d}")
-        
-        jk_sign = util.jackknife_noniid(
-            bins_nsamp, bins_sign,
-            f=lambda ns, s: (s / ns).real,
-        )
-        jk_E = util.jackknife_noniid(
-            bins_nsamp, bins_sign, bins_E,
-            f=lambda ns, s, e: (e / s).real,
-        )
 
-        sign_mean = float(np.asarray(jk_sign[0]).reshape(-1)[0])
-        sign_err = float(np.asarray(jk_sign[1]).reshape(-1)[0])
+        jk_E = util.jackknife_noniid(bins_nsamp, bins_sign, bins_E)
+
         E_mean = float(np.asarray(jk_E[0]).reshape(-1)[0])
         E_err = float(np.asarray(jk_E[1]).reshape(-1)[0])
         E_mean_list.append(E_mean)
@@ -186,6 +178,7 @@ def fluc(subdirs, tp):
         beta_0 = util.load_firstfile(os.path.join(d, ""), "metadata/beta")
         beta_0 = float(np.asarray(beta_0[0], dtype=float).reshape(-1)[0])
         T_list.append(1 / beta_0)
+        #print("current T = ", 1/beta_0)
 
         bins_e = []
         bins_h2 = []
@@ -203,17 +196,17 @@ def fluc(subdirs, tp):
 
             if not np.isclose(beta, beta_0):
                 raise ValueError(f"Inconsistent beta across bins in {file}: {beta} vs {beta_0}")
-
             if Nsite_0 is None:
                 Nsite_0 = Nsite
             elif Nsite != Nsite_0:
                 raise ValueError(f"Inconsistent system size in {file}: {Nsite} vs {Nsite_0}")
 
+            # Per site energy and energy corrlations
             k = float(np.asarray(K(g00, Nx, Ny, tp), dtype=float).reshape(-1)[0])
             e = k + U * double_occ
-
-            h2 = kk.sum() + 2 * U * kv.sum() + U**2 * vv.sum()
-            hn = kn.sum() + U * vn.sum()
+            # TODO: Check sign of kinetic energy correlation
+            h2 = kk.sum() -2 * U * kv.sum() + U**2 * vv.sum()
+            hn = -kn.sum() + U * vn.sum()
             n = density
             n2 = nn.sum()
 
@@ -239,14 +232,14 @@ def fluc(subdirs, tp):
             hn_mean = (hn / s).real
             n_mean = (n / s).real
             n2_mean = (n2 / s).real
-
             cov_hh = h2_mean - Nsite_0 * e_mean**2
             cov_hn = hn_mean - Nsite_0 * e_mean * n_mean
             cov_nn = n2_mean - Nsite_0 * n_mean**2
-
-            if np.any(np.abs(cov_nn) < 1e-14):
+            #print("cov_hh = ", cov_hh)
+            #print("cov_hn = ", cov_hn)
+            #print("cov_nn = ", cov_nn)
+            if np.any(np.abs(cov_nn) < 1e-6):
                 return np.nan
-
             return beta_0**2 * (cov_hh - cov_hn**2 / cov_nn)
 
         jk_C = util.jackknife_noniid(
@@ -326,19 +319,19 @@ def main():
         np.save(out_Ce, C_err_d)
 
         plt.figure()
-        plt.errorbar(
+        diff_plt = plt.errorbar(
             T_mid_d, C_d, yerr=C_err_d,
             fmt="o", ms=4,
             linestyle="none",
             capsize=2,
             elinewidth=1.0,
         )
-
+        diff_color = diff_plt[0].get_color()
         if T_mid_d.size >= 3:
             x = np.log(T_mid_d)
             xs = np.linspace(x.min(), x.max(), 400)
             pchip = PchipInterpolator(x, C_d)
-            plt.plot(np.exp(xs), pchip(xs), "-", lw=1.5)
+            plt.plot(np.exp(xs), pchip(xs), "-", lw=1.5, color=diff_color)
 
         plt.xscale("log")
         plt.xlabel("T")
@@ -361,19 +354,19 @@ def main():
         np.save(out_Ce, C_err_f)
 
         plt.figure()
-        plt.errorbar(
+        fluc_plt = plt.errorbar(
             T_f, C_f, yerr=C_err_f,
             fmt="o", ms=4,
             linestyle="none",
             capsize=2,
             elinewidth=1.0,
         )
-
+        fluc_color = fluc_plt[0].get_color()
         if T_f.size >= 3:
             x = np.log(T_f)
             xs = np.linspace(x.min(), x.max(), 400)
             pchip = PchipInterpolator(x, C_f)
-            plt.plot(np.exp(xs), pchip(xs), "-", lw=1.5)
+            plt.plot(np.exp(xs), pchip(xs), "-", lw=1.5, color=fluc_color)
 
         plt.xscale("log")
         plt.xlabel("T")
@@ -388,7 +381,7 @@ def main():
 
     if args.mode == "both":
         plt.figure()
-        plt.errorbar(
+        fluc_plt = plt.errorbar(
             T_f, C_f, yerr=C_err_f,
             fmt="o", ms=4,
             linestyle="none",
@@ -396,26 +389,27 @@ def main():
             elinewidth=1.0,
             label="energy fluctuation"
         )
-        plt.errorbar(
+        fluc_color = fluc_plt[0].get_color()
+        diff_plt = plt.errorbar(
             T_mid_d, C_d, yerr=C_err_d,
             fmt="o", ms=4,
             linestyle="none",
             capsize=2,
             elinewidth=1.0,
-            label="derivative"
+            label="finite difference"
         )
-
+        diff_color = diff_plt[0].get_color()
         if T_f.size >= 3:
             x = np.log(T_f)
             xs = np.linspace(x.min(), x.max(), 400)
             pchip = PchipInterpolator(x, C_f)
-            plt.plot(np.exp(xs), pchip(xs), "-", lw=1.5)
+            plt.plot(np.exp(xs), pchip(xs), "-", lw=1.5, color=fluc_color)
 
         if T_mid_d.size >= 3:
             x = np.log(T_mid_d)
             xs = np.linspace(x.min(), x.max(), 400)
             pchip = PchipInterpolator(x, C_d)
-            plt.plot(np.exp(xs), pchip(xs), "-", lw=1.5)
+            plt.plot(np.exp(xs), pchip(xs), "-", lw=1.5, color=diff_color)
 
         plt.xscale("log")
         plt.xlabel("T")
