@@ -71,10 +71,11 @@ def main():
         except Exception:
             raise ValueError("--xrange must be in the form 'xmin,xmax' with xmin<xmax, e.g. --xrange 0.2,1.0")
 
-    pattern = os.path.join(base, "n*", "T*_beta*_U*", "mu*")
-    mu_dirs = sorted(glob(pattern))
+    pattern_n = os.path.join(base, "n*", "T*_beta*_U*", "mu*")
+    pattern_hf = os.path.join(base, "half_filling", "T_*")
+    mu_dirs = sorted(glob(pattern_n)+glob(pattern_hf))
     if not mu_dirs:
-        raise FileNotFoundError(f"No mu directories found with pattern: {pattern}")
+        raise FileNotFoundError(f"No mu directories found with pattern: {pattern_n} and {pattern_hf}")
     
     rows = []
     n_bad = 0
@@ -84,10 +85,16 @@ def main():
         nn, n, sign, mu, nsamp, beta, U, nsite = get_meas(mu_dir_h5)
         
         # Infer target n and T from directory path
-        mnt = re.search(r"/n(0\.[0-9]+)(?:/|$)", mu_dir_h5)
-        n_target = float(mnt.group(1)) if mnt else np.nan
-        mT = re.search(r"/T([0-9eE+\-\.]+)_beta([0-9eE+\-\.]+)_U([0-9eE+\-\.]+)(?:/|$)", mu_dir_h5)
-        T = float(mT.group(1)) if mT else np.nan
+        hf = re.search(r"half_filling", mu_dir_h5)
+        if hf:
+            n_target = 1.0
+            mT = re.search(r"/T_([0-9eE+\-\.]+)", mu_dir_h5)
+            T = float(mT.group(1)) if mT else np.nan
+        else:
+            mnt = re.search(r"/n(0\.[0-9]+)(?:/|$)", mu_dir_h5)
+            n_target = float(mnt.group(1)) if mnt else np.nan
+            mT = re.search(r"/T([0-9eE+\-\.]+)_beta([0-9eE+\-\.]+)_U([0-9eE+\-\.]+)(?:/|$)", mu_dir_h5)
+            T = float(mT.group(1)) if mT else np.nan
 
         # Ensure arrays are 1D over bins
         sign = np.asarray(sign).reshape(-1)
