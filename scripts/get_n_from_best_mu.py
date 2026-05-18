@@ -56,12 +56,13 @@ def get_nsite_from_firstfile(mu_dir: str) -> int:
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--path", required=True, 
-                   help="Base directory named as n*, containing hdf5 files under n*/T*_beta*_U*/mu*/")
+                   help="Base directory")
     p.add_argument("--output_path",  
                    help="Directory for output, will be created if needed")
+    p.add_argument("--glob", default="n*/T*_beta*_U*/mu*/")
     args = p.parse_args()
-    base = os.path.expanduser(args.path)
-    if not os.path.isdir(base):
+    base = Path(os.path.expanduser(args.path))
+    if not base.is_dir():
         raise FileNotFoundError(f"Base path not found or not a directory: {base}")
     
     # Resolve output location
@@ -83,20 +84,21 @@ def main():
             os.makedirs(out_dir, exist_ok=True)
 
     # Discover all mu directories
-    # Expect structure: <base>/n*/T*_beta*_U*/mu*/
-    pattern = os.path.join(base, "n*", "T*_beta*_U*", "mu*")
-    mu_dirs = sorted(glob(pattern))
+    mu_dirs = sorted(base.glob(args.glob))
+    #pattern = os.path.join(base, "n*", "T*_beta*_U*", "mu*")
+    #mu_dirs = sorted(glob(pattern))
     if not mu_dirs:
-        raise FileNotFoundError(f"No mu directories found with pattern: {pattern}")
+        raise FileNotFoundError(f"No mu directories found under {base}")
 
     rows = []
     n_bad = 0
 
     for mu_dir in mu_dirs:
-        mu_dir_h5 = mu_dir if mu_dir.endswith(os.sep) else (mu_dir + os.sep)
+        mu_dir_str = str(mu_dir)
+        mu_dir_h5 = mu_dir_str if mu_dir_str.endswith(os.sep) else (mu_dir_str + os.sep)
         # Infer target n and (T,beta,U) from path
-        n_target = infer_target_n_from_path(mu_dir)
-        T, beta, U = infer_T_beta_U_from_path(mu_dir)
+        n_target = infer_target_n_from_path(mu_dir_str)
+        T, beta, U = infer_T_beta_U_from_path(mu_dir_str)
 
         # Determine Nsite for converting N -> <n>
         try:
@@ -125,7 +127,7 @@ def main():
         dn = n_mean - n_target if np.isfinite(n_mean) and np.isfinite(n_target) else np.nan
 
         rows.append((
-            n_target, T, beta, U, mu, n_mean, n_err, dn, int(nsite) if np.isfinite(nsite) else -1, mu_dir
+            n_target, T, beta, U, mu, n_mean, n_err, dn, int(nsite) if np.isfinite(nsite) else -1, mu_dir_str
         ))
 
     # Sort rows: by n_target, then T, then mu
