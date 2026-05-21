@@ -39,7 +39,20 @@ def get_meas(file: str):
     nsite = Nx0 * Ny0
     return nn, n, sign, nsamp, beta, U, nsite, Nx0, Ny0
 
+def C_to_Sq(nsamp, sign, dens, nn, Ny, Nx):
+    C = (nn.T / sign).T - (np.asarray(dens / sign)**2)[..., None]
+    if C.ndim == 1:
+        C = C.reshape(Ny, Nx)
+    else:
+        C = C.reshape(C.shape[0], Ny, Nx)
+    return np.fft.fft2(C, axes=(-2, -1)).real
+
 def process_one_dir(run_path: str, out_prefix: str, vlim=None):
+    '''
+    Process a single directory containing HDF5 bins. These bins should ideally be with
+    the same T, U, mu, and n. Plotting the bubble maps for staggered and non-staggered 
+    charge order, and the 2D map of S(q). Returning T and S_CDW.
+    '''
     files = sorted(glob.glob(os.path.join(run_path, "*.h5")))
     if not files:
         raise FileNotFoundError(f"No .h5 files found in {run_path}")
@@ -112,6 +125,63 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
     S_cdw = float(S_cdw_jk[0])
     S_cdw_err = float(S_cdw_jk[1])
 
+    # S_CDW(q)
+    S_q_jk = util.jackknife_noniid(
+        bins_nsamp,
+        bins_sign,
+        bins_dens,
+        bins_nn,
+        f=lambda nsamp, sign, dens, nn: C_to_Sq(nsamp, sign, dens, nn, Ny, Nx),
+    )
+    S_q_mean = np.asarray(S_q_jk[0], dtype=float)
+    S_q_err = np.asarray(S_q_jk[1], dtype=float)
+
+    # Plot S_CDW(q) in momentum space. fftshift moves q=(0,0) to the center;
+    # for even Nx, Ny, q=(pi,pi) is equivalent to (-pi,-pi) and appears at the BZ corner.
+    S_q_plot = np.fft.fftshift(S_q_mean)
+    qx_over_pi = np.fft.fftshift(np.fft.fftfreq(Nx, d=1.0)) * 2.0
+    qy_over_pi = np.fft.fftshift(np.fft.fftfreq(Ny, d=1.0)) * 2.0
+
+    fig, ax = plt.subplots(figsize=(5.2, 4.6))
+    im = ax.imshow(S_q_plot, origin="lower", aspect="equal")
+    fig.colorbar(im, ax=ax, pad=0.02, label=r"$S_{CDW}(q)$")
+    ax.set_xlabel(r"$q_x/\pi$")
+    ax.set_ylabel(r"$q_y/\pi$")
+    ax.set_xticks(np.arange(Nx))
+    ax.set_yticks(np.arange(Ny))
+    ax.set_xticklabels([f"{v:.2g}" for v in qx_over_pi])
+    ax.set_yticklabels([f"{v:.2g}" for v in qy_over_pi])
+    ax.tick_params(axis="x", labelrotation=45)
+    ax.scatter([0], [0], marker="x", s=80, color="black", linewidths=1.5)
+    ax.text(0.15, 0.15, r"$(\pi,\pi)$", color="black", fontsize=9,
+            ha="left", va="bottom")
+    fig.tight_layout()
+    fig.savefig(os.path.join(run_path, f"{out_prefix}_S_cdw_qspace.png"), dpi=200)
+    plt.close(fig)
+
+    np.save(os.path.join(run_path, f"{out_prefix}_S_cdw_qspace_mean.npy"), S_q_mean)
+    np.save(os.path.join(run_path, f"{out_prefix}_S_cdw_qspace_err.npy"), S_q_err)
+
+    # Check if S_q peaks at (pi,pi)
+    iy_pi = Ny // 2
+    ix_pi = Nx // 2
+    S_pipi = S_q_mean[iy_pi, ix_pi]
+    S_pipi_err = S_q_err[iy_pi, ix_pi]
+    max_idx = np.unravel_index(np.argmax(S_q_mean), S_q_mean.shape)
+    iy_max, ix_max = max_idx
+    qx_max = 2 * np.pi * ix_max / Nx
+    qy_max = 2 * np.pi * iy_max / Ny
+    qx_max_wrapped = (qx_max + np.pi) % (2*np.pi) - np.pi
+    qy_max_wrapped = (qy_max + np.pi) % (2*np.pi) - np.pi
+    print(
+        f"S(pi,pi)={S_pipi:.8g} +/- {S_pipi_err:.3g}; "
+        f"max at ix={ix_max}, iy={iy_max}, "
+        f"qx/pi={qx_max_wrapped/np.pi:.3f}, "
+        f"qy/pi={qy_max_wrapped/np.pi:.3f}, "
+        f"Smax={S_q_mean[max_idx]:.8g}"
+    )
+
+    # Move the origin to the center of the map
     C_map_plot = np.fft.fftshift(C_map)
     C_stag_plot = np.fft.fftshift(C_stag)
     C_err_map_plot = np.fft.fftshift(C_map_err)
@@ -189,6 +259,9 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
     print(f"  {os.path.join(run_path, out_prefix + '_charge_corr.png')}")
     print(f"  {os.path.join(run_path, out_prefix + '_charge_corr_stag.png')}")
     print(f"  {os.path.join(run_path, out_prefix + '_charge_corr_bubble.png')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_S_cdw_qspace.png')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_S_cdw_qspace_mean.npy')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_S_cdw_qspace_err.npy')}")
 
     return {
         "dir": run_path,
