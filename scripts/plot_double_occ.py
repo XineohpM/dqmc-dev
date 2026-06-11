@@ -96,6 +96,11 @@ def get_meas_dir(dir: str):
     double_occ_arr = np.asarray(double_occ_list, dtype=float)
     sign_arr = np.asarray(sign_list, dtype=float)
     nsamp_arr = np.asarray(nsamp_list, dtype=float)
+    mask = nsamp_arr == nsamp_arr.max()
+    density_arr = density_arr[mask]
+    double_occ_arr = double_occ_arr[mask]
+    sign_arr = sign_arr[mask]
+    nsamp_arr = nsamp_arr[mask]
     single_occ_arr = density_arr - 2.0 * double_occ_arr
 
     # Jackknife
