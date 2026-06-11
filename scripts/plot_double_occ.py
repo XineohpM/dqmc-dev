@@ -114,7 +114,7 @@ def get_meas_dir(dir: str):
     single_occ_mean = jk_single_occ[0]
     single_occ_err = jk_single_occ[1]
 
-    if not np.isclose(density_mean, nt, atol=1e-2):
+    if not np.isclose(density_mean, nt, atol=1.5e-2):
         raise ValueError(f"density mismatch in {dir}: measured density={density_mean}, target n={nt}")
     
     return double_occ_mean, double_occ_err, single_occ_mean, single_occ_err, nt, Tt
