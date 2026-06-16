@@ -110,7 +110,7 @@ def main():
     colors = cmap(np.linspace(0.90, 0.10, len(curves)))
 
     # Plot
-    plt.figure(figsize=(4, 6.5))
+    plt.figure(figsize=(5.0, 6.5))
     xmax = 0.0
     ymin = +np.inf
     ymax = -np.inf
