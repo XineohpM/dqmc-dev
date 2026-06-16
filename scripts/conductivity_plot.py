@@ -122,7 +122,7 @@ def main():
         ymax = max(ymax, float(np.max(p84 if not args.no_band else mu)))
 
         # label = f"T = {T:g}  (good {ng}/{nt})"
-        label = f"T = {T:g}"
+        label = f"T/t = {T:g}"
         plt.plot(w, mu, lw=2, label=label, color=colors[i])
         if not args.no_band:
             plt.fill_between(w, p16, p84, alpha=0.20, linewidth=0, color=colors[i])
@@ -138,9 +138,9 @@ def main():
     yhi = args.ymax if args.ymax is not None else max(0.10, ymax*1.05)
     plt.ylim(ylo, yhi)
 
-    plt.xlabel(r'$\omega$')
-    plt.ylabel(r'$\sigma(\omega)$')
-    plt.grid(alpha=0.25, ls=':')
+    plt.xlabel(r'$\omega/t$')
+    plt.ylabel(r'$\sigma_{xx}\ \left[e^{2} / \hbar\right]$')
+    #plt.grid(alpha=0.25, ls=':')
     plt.legend(frameon=False)
     plt.tight_layout()
     outpath = os.path.expanduser(args.out)
