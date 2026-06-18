@@ -180,16 +180,28 @@ def main():
     ax.set_ylabel(r"$\langle \text{sign} \rangle$")
     ax.set_yscale("log")
     ax.grid(False)
-    ax.legend(frameon=False)
+    ax.legend(
+        frameon=False,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        borderaxespad=0.0,
+    )
     fig.tight_layout()
 
     out_fig = args.out_fig
     if out_fig is None:
         out_fig = os.path.join(base_path, f"{args.out_prefix}_vs_n.png")
-    out_dir = os.path.dirname(out_fig)
+    out_root, out_ext = os.path.splitext(out_fig)
+    if out_ext.lower() not in (".png", ".pdf"):
+        out_root = out_fig
+    out_png = f"{out_root}.png"
+    out_pdf = f"{out_root}.pdf"
+
+    out_dir = os.path.dirname(out_png)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    fig.savefig(out_fig, dpi=200)
+    fig.savefig(out_png, dpi=300, bbox_inches="tight")
+    fig.savefig(out_pdf, bbox_inches="tight")
     plt.close(fig)
 
     order = np.lexsort((
@@ -211,7 +223,8 @@ def main():
     print(f"  {os.path.join(base_path, args.out_prefix + '_T.npy')}")
     print(f"  {os.path.join(base_path, args.out_prefix + '_mean.npy')}")
     print(f"  {os.path.join(base_path, args.out_prefix + '_err.npy')}")
-    print(f"  {out_fig}")
+    print(f"  {out_png}")
+    print(f"  {out_pdf}")
 
 
 if __name__ == "__main__":
