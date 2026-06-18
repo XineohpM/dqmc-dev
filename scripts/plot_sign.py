@@ -178,6 +178,7 @@ def main():
     ax.set_xticks(n_values)
     ax.set_xlabel("n")
     ax.set_ylabel(r"$\langle \text{sign} \rangle$")
+    ax.set_yscale("log")
     ax.grid(False)
     ax.legend(frameon=False)
     fig.tight_layout()
