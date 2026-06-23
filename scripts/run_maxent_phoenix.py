@@ -87,7 +87,7 @@ import traceback
 
 #Adapted from Emily's run_maxent.py code
 def perform_maxent(chi,  omega_grid, metadata, 
-                   append=None,
+                   append=None, alpha_arr=np.logspace(1,9,1+20*(9-1)),
                    bs=1, anneal_arr = None, checks=False, printout=False, op_type='boson', sym=True, 
                    **mkwargs):
         """Performs MaxEnt on correlations of the form O(tau)O^{dagger}. Wrapper for maxent module. 
@@ -149,7 +149,7 @@ def perform_maxent(chi,  omega_grid, metadata,
                     pre["K"] = pre["K"][:-1,:]
 
                 #  best estimate of A(omega_i) *    domega_i
-                A = maxent.MaxEnt(pre, printout=printout, **mkwargs)
+                A = maxent.MaxEnt(pre, printout=printout, alpha_arr=alpha_arr, **mkwargs)
                 s = (A/domega)*pre["norm"]*np.pi 
                 A_bs[i,:] = A
                 s_bs[i,:] = s
@@ -246,6 +246,12 @@ def _parse_args():
                     help="Path to default model, which should be a (N_omega, 1) array.")
         p.add_argument("--method", choices=["classic", "bryan", "BT"], default="BT",
                     help="Alpha selection method, defualt BT.")
+        p.add_argument("--alpha_min", type=float, default=1,
+                    help="Base-10 exponent for the alpha scan lower bound; alpha_min=10**alpha_min.")
+        p.add_argument("--alpha_max", type=float, default=9,
+                    help="Base-10 exponent for the alpha scan upper bound; alpha_max=10**alpha_max.")
+        p.add_argument("--alpha_pts", type=int, default=161,
+                    help="Number of log-spaced alpha points between 10**alpha_min and 10**alpha_max.")
         p.add_argument("--output_path", type=str,
                     help="Path to write output files.")
         p.add_argument("--output_prefix", type=str,
@@ -293,6 +299,13 @@ def main():
             omega, domega = build_grid(op_type, sym, int(args.n_omega), float(args.omega_max), grid, float(args.a), float(args.b))
         else: raise ValueError(f"Unknown grid type: {grid}, grid type should be either \"linear\" or \"sinh\"")
 
+        if args.alpha_pts < 2:
+            raise ValueError("--alpha_pts must be at least 2.")
+        if args.alpha_max <= args.alpha_min:
+            raise ValueError("--alpha_max must be greater than --alpha_min.")
+            
+        alpha_arr = np.logspace(args.alpha_min, args.alpha_max, args.alpha_pts)
+
         anneal_model = None
         if args.model: 
             anneal_model = np.load(args.model, allow_pickle=False)
@@ -317,6 +330,7 @@ def main():
             omega_grid=(omega, domega),
             metadata=metadata,
             append=append,
+            alpha_arr=alpha_arr,
             bs=int(args.bs),
             anneal_arr=anneal_model,
             checks=args.checks,

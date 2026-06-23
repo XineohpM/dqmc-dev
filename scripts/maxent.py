@@ -152,6 +152,9 @@ def MaxEnt(pre,  alpha_arr = np.logspace(1, 9, 1+20*(9-1)),  method = 'BT', \
         print("input alpha array is scalar, no tuning")
         A_out, _, _ =  MaxEnt_Fixed_Alpha(Gp,W,Kp,m,alpha_arr,precalc_svd)
         return A_out
+    
+    if printout:
+        print(f"alpha scan: {alpha_arr[0]:.3e} to {alpha_arr[-1]:.3e}, N={len(alpha_arr)}")
 
     #get optimized A, chi as function of alpha
     N_alpha = alpha_arr.shape[0]

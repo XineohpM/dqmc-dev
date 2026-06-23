@@ -112,6 +112,12 @@ def main():
                 "Input the width of the gap.")
     p.add_argument("--method", choices=["classic", "bryan", "BT"], default="BT",
                 help="Alpha selection method, defualt BT.")
+    p.add_argument("--alpha_min", type=float, default=1,
+                help="Base-10 exponent for the alpha scan lower bound; alpha_min=10**alpha_min.")
+    p.add_argument("--alpha_max", type=float, default=9,
+                help="Base-10 exponent for the alpha scan upper bound; alpha_max=10**alpha_max.")
+    p.add_argument("--alpha_pts", type=int, default=161,
+                help="Number of log-spaced alpha points between 10**alpha_min and 10**alpha_max.")
     p.add_argument("--output_relpath", type=str,
                 help="Relative path to write output files.")
     p.add_argument("--output_prefix", type=str,
@@ -187,6 +193,14 @@ def main():
     else: raise ValueError(f"Unknown grid type: {grid}, grid type should be either \"linear\" or \"sinh\"")
 
     append = args.append
+
+    if args.alpha_pts < 2:
+        raise ValueError("--alpha_pts must be at least 2.")
+    if args.alpha_max <= args.alpha_min:
+        raise ValueError("--alpha_max must be greater than --alpha_min.")
+
+    alpha_arr = np.logspace(args.alpha_min, args.alpha_max, args.alpha_pts)
+
     mkwargs = {"method": args.method}
     if args.rnd_seed is not None:
         np.random.seed(int(args.rnd_seed))
@@ -228,6 +242,7 @@ def main():
             omega_grid=(omega, domega),
             metadata=metadata,
             append=append,
+            alpha_arr=alpha_arr,
             bs=int(args.bs),
             anneal_arr=model,
             checks=args.checks,
