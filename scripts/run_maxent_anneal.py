@@ -124,6 +124,8 @@ def main():
                 help="Coefficient b in omega = a*sinh(b*x).")
     p.add_argument("--checks", action="store_true",
                 help="Plot bootstrap reconstructions and diagnostics.")
+    p.add_argument("--printout", action="store_true",
+                help="Print bootstrap diagnostics.")
     p.add_argument("--rnd_seed", type=int,
                 help="Seed for bootstrap resampling RNG.")
     
@@ -229,6 +231,7 @@ def main():
             bs=int(args.bs),
             anneal_arr=model,
             checks=args.checks,
+            printout=args.printout,
             op_type=op_type,
             sym=sym,
             **mkwargs
@@ -255,5 +258,4 @@ def main():
 
 if __name__ == "__main__": main()
         
-
 
