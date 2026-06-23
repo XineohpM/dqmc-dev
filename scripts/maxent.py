@@ -235,6 +235,12 @@ def MaxEnt(pre,  alpha_arr = np.logspace(1, 9, 1+20*(9-1)),  method = 'BT', \
             plt.grid(True)
             plt.xscale("log")
             plt.show()
+        if printout:
+            print(
+                f"BT selected alpha = {alpha_out:.6e} "
+                f"(index {pos}/{len(alpha_arr)-1}), "
+                f"chi2 = {chi2_arr[pos]:.6g}"
+            )
     else:
         raise ValueError('invalid method spec')
     

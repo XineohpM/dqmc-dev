@@ -88,7 +88,7 @@ import traceback
 #Adapted from Emily's run_maxent.py code
 def perform_maxent(chi,  omega_grid, metadata, 
                    append=None,
-                   bs=1, anneal_arr = None, checks=False, op_type='boson', sym=True, 
+                   bs=1, anneal_arr = None, checks=False, printout=False, op_type='boson', sym=True, 
                    **mkwargs):
         """Performs MaxEnt on correlations of the form O(tau)O^{dagger}. Wrapper for maxent module. 
         Args: 
@@ -149,7 +149,7 @@ def perform_maxent(chi,  omega_grid, metadata,
                     pre["K"] = pre["K"][:-1,:]
 
                 #  best estimate of A(omega_i) *    domega_i
-                A = maxent.MaxEnt(pre, **mkwargs)
+                A = maxent.MaxEnt(pre, printout=printout, **mkwargs)
                 s = (A/domega)*pre["norm"]*np.pi 
                 A_bs[i,:] = A
                 s_bs[i,:] = s
@@ -258,6 +258,8 @@ def _parse_args():
                     help="Coefficient b in omega = a*sinh(b*x).")
         p.add_argument("--checks", action="store_true",
                     help="Plot bootstrap reconstructions and diagnostics.")
+        p.add_argument("--printout", action="store_true",
+                    help="Print bootstrap diagnostics.")
         p.add_argument("--rnd_seed", type=int,
                     help="Seed for bootstrap resampling RNG.")
         return p.parse_args()
@@ -318,6 +320,7 @@ def main():
             bs=int(args.bs),
             anneal_arr=anneal_model,
             checks=args.checks,
+            printout=args.printout,
             op_type=op_type,
             sym=sym,
             **mkwargs
