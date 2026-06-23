@@ -85,7 +85,9 @@ def main():
     p.add_argument("--base", required=True,
                     help="Base directory that contains the temperature subdirectories listed in --items.")
     p.add_argument("--items", nargs="+", required=True,
-                    help=("List of items: each is 'relpath,T'. Example:'T_0.2,0.2'"))
+                    help=("List of items. Each item is either 'relpath,T' or "
+                        "'relpath,T,alpha_min,alpha_max' or "
+                        "'relpath,T,alpha_min,alpha_max,alpha_pts'."))
     p.add_argument("--data_file", type = str, required=True,
                     help="Filname of the imaginary time correlator, (N_bin, L)")
     p.add_argument("--omega_max", type=float, required=True,
@@ -112,12 +114,6 @@ def main():
                 "Input the width of the gap.")
     p.add_argument("--method", choices=["classic", "bryan", "BT"], default="BT",
                 help="Alpha selection method, defualt BT.")
-    p.add_argument("--alpha_min", type=float, default=1,
-                help="Base-10 exponent for the alpha scan lower bound; alpha_min=10**alpha_min.")
-    p.add_argument("--alpha_max", type=float, default=9,
-                help="Base-10 exponent for the alpha scan upper bound; alpha_max=10**alpha_max.")
-    p.add_argument("--alpha_pts", type=int, default=161,
-                help="Number of log-spaced alpha points between 10**alpha_min and 10**alpha_max.")
     p.add_argument("--output_relpath", type=str,
                 help="Relative path to write output files.")
     p.add_argument("--output_prefix", type=str,
@@ -142,14 +138,37 @@ def main():
 
     T_arr = []
     dpath_arr = []
-    dt_arr = []
+    #dt_arr = []
+    alpha_min_arr = []
+    alpha_max_arr = []
+    alpha_pts_arr = []
 
     for item in args.items:
-        rel, Tstr = item.split(",")
-        T = float(Tstr)
-        #dt = float(dtstr)
-        dpath = os.path.join(args.base, rel)
+        parts = item.split(",")
+        if len(parts) == 2:
+            rel, Tstr = parts
+            alpha_min = 1
+            alpha_max = 9
+            alpha_pts = 161
+        elif len(parts) == 4:
+            rel, Tstr, amin_str, amax_str = parts
+            alpha_min = float(amin_str)
+            alpha_max = float(amax_str)
+            alpha_pts = 161
+        elif len(parts) == 5:
+            rel, Tstr, amin_str, amax_str, apts_str = parts
+            alpha_min = float(amin_str)
+            alpha_max = float(amax_str)
+            alpha_pts = int(apts_str)
+        else:
+            raise ValueError(
+                "Each --items entry must be 'relpath,T' or " \
+                "'relpath,T,alpha_min,alpha_max' or " \
+                "'relpath,T,alpha_min,alpha_max,alpha_pts'."
+            )
 
+        T = float(Tstr)
+        dpath = os.path.join(args.base, rel)
         files = sorted(glob.glob(os.path.join(dpath, "*.h5")))
         if not files:
             raise FileNotFoundError(f"No .h5 files found in {dpath}")
@@ -161,22 +180,34 @@ def main():
         
         T_arr.append(T)
         dpath_arr.append(dpath)
+        alpha_min_arr.append(alpha_min)
+        alpha_max_arr.append(alpha_max)
+        alpha_pts_arr.append(alpha_pts)
         #dt_arr.append(dt)
         if args.highT_model is not None:
             idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=True)
             T_arr    = [T_arr[i] for i in idx]
             dpath_arr = [dpath_arr[i] for i in idx]
+            alpha_min_arr = [alpha_min_arr[i] for i in idx]
+            alpha_max_arr = [alpha_max_arr[i] for i in idx]
+            alpha_pts_arr = [alpha_pts_arr[i] for i in idx]
             #dt_arr   = [dt_arr[i] for i in idx]
         elif args.lowT_gap is not None:
             idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=False)
             T_arr    = [T_arr[i] for i in idx]
             dpath_arr = [dpath_arr[i] for i in idx]
+            alpha_min_arr = [alpha_min_arr[i] for i in idx]
+            alpha_max_arr = [alpha_max_arr[i] for i in idx]
+            alpha_pts_arr = [alpha_pts_arr[i] for i in idx]
             #dt_arr   = [dt_arr[i] for i in idx]
         else:
             print("Model not given. Using flat model for annealing from high T to low T.")
             idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=True)
             T_arr    = [T_arr[i] for i in idx]
             dpath_arr = [dpath_arr[i] for i in idx]
+            alpha_min_arr = [alpha_min_arr[i] for i in idx]
+            alpha_max_arr = [alpha_max_arr[i] for i in idx]
+            alpha_pts_arr = [alpha_pts_arr[i] for i in idx]
             #dt_arr   = [dt_arr[i] for i in idx]
 
     op_type = args.op_type
@@ -194,13 +225,6 @@ def main():
 
     append = args.append
 
-    if args.alpha_pts < 2:
-        raise ValueError("--alpha_pts must be at least 2.")
-    if args.alpha_max <= args.alpha_min:
-        raise ValueError("--alpha_max must be greater than --alpha_min.")
-
-    alpha_arr = np.logspace(args.alpha_min, args.alpha_max, args.alpha_pts)
-
     mkwargs = {"method": args.method}
     if args.rnd_seed is not None:
         np.random.seed(int(args.rnd_seed))
@@ -210,6 +234,11 @@ def main():
         T = T_arr[i]
         #dt = dt_arr[i]
         dpath = dpath_arr[i]
+        if alpha_pts_arr[i] < 2:
+            raise ValueError("alpha_pts must be at least 2.")
+        if alpha_max_arr[i] <= alpha_min_arr[i]:
+            raise ValueError("alpha_max must be greater than alpha_min.")
+        alpha_arr = np.logspace(alpha_min_arr[i], alpha_max_arr[i], alpha_pts_arr[i])
         if i == 0:
             if args.highT_model is not None:
                 model = np.array([float(x) for x in args.highT_model.split(",") if x.strip()], dtype=float)
