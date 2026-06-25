@@ -3,12 +3,12 @@
 extract_perbin_jj.py
 phoenixm@stanford.edu
 
-Extract imaginary-time current-current correlator from DQMC HDF5 outputs.
+Extract per-site imaginary-time current-current correlator from DQMC HDF5 outputs.
 
 In `jqjq.py`, `get_component(path, "jj")` returns q=0 correlator *NOT divided by sign*.
 `get_sign(path)` returns accumulated sign SUM(phase) (not divided by n_sample).
 
-These per-bin arrays are directly suitable for bootstrap/jackknife and MaxEnt/SAC workflows.
+These per-bin arrays are directly suitable for bootstrap/jackknife and MaxEnt workflows.
 
 Usage examples:
   1) Electrical current correlator (JNJN) for xx component (default):
@@ -36,17 +36,6 @@ Usage examples:
        --component all \
        --prefix U-6_T0.2_
 
-  5) Per-site normalization (requires Nx, Ny; Norb optional) and custom output directory:
-     python3 extract_perbin_jj.py \
-       --path /scratch/users/phoenixm/dqmc_runs/U-6_n6x6_conductivity/T_0.2/ \
-       --output_type electric \
-       --component xx \
-       --per_site --Nx 6 --Ny 6 --Norb 1 \
-       --outdir /scratch/users/phoenixm/dqmc_runs/postproc/U-6_T0.2/
-
-Notes:
-  - The path must point to the directory that directly contains the *.h5 files.
-  - If util.py uses glob(path + "*.h5"), ensure the directory path ends with a trailing '/'.
 """
 
 from __future__ import annotations
@@ -184,17 +173,6 @@ def main() -> None:
     )
     p.add_argument("--outdir", default=None, help="Output directory (default: same as --path).")
     p.add_argument("--prefix", default="", help="Prefix for output filenames (default: empty).")
-    p.add_argument(
-        "--per_site",
-        action="store_true",
-        help=(
-            "Optional: divide correlator by Nsite (Nx*Ny*Norb). "
-            "Default is OFF because many implementations already average over symmetry/volume."
-        ),
-    )
-    p.add_argument("--Nx", type=int, default=None, help="Nx (required if --per_site).")
-    p.add_argument("--Ny", type=int, default=None, help="Ny (required if --per_site).")
-    p.add_argument("--Norb", type=int, default=1, help="Norb (default: 1).")
 
     args = p.parse_args()
 
@@ -217,7 +195,7 @@ def main() -> None:
             f"If your files are in a nested folder, pass the directory that directly contains the .h5 files."
         )
 
-    # 1) Load jj and project to physical tensor components.
+    # Load jj and project to physical tensor components.
     jj_q0 = jqjq.get_component(path, "jj")
     jj_4 = np.asarray(jqjq.electrical_sum(path, jj_q0))  # (4, Nbin, L), np.stack((jj_xx, jj_yy, jj_xy, jj_yx), axis=0)
 
@@ -251,7 +229,7 @@ def main() -> None:
         JNJQ = all_dict["JNJQ"]
 
 
-    # 2) Load sign and n_sample for completed bins (must align with jj_4 bins).
+    # Load sign and n_sample for completed bins (must align with jj_4 bins).
     sign_accum, n_sample = _load_sign_and_ns_completed(path)
 
     if sign_accum.shape[0] != Nbin:
@@ -262,21 +240,6 @@ def main() -> None:
 
     mean_sign_perbin = sign_accum / n_sample
 
-    # 3) Optional per-site normalization.
-    if args.per_site:
-        if args.Nx is None or args.Ny is None:
-            raise ValueError("--per_site requires --Nx and --Ny")
-        Nsite = int(args.Nx) * int(args.Ny) * int(args.Norb)
-        if Nsite <= 0:
-            raise ValueError("Invalid Nsite computed from Nx, Ny, Norb")
-        jj_4 = jj_4 / float(Nsite)
-        JNJN = JNJN / float(Nsite)
-        if args.output_type != "JNJN" and args.output_type != "electric":
-            JQJQ = JQJQ / float(Nsite)
-            JQJN = JQJN / float(Nsite)
-            JNJQ = JNJQ / float(Nsite)
-
-    # 4) Correct per-bin sign reweighting.
     # Use the shared helper to guard against zero accumulated sign.
     JNJN_rw = np.stack([
         _reweight_by_sign_perbin(JNJN[a], sign_accum) for a in range(4)
@@ -292,13 +255,13 @@ def main() -> None:
             _reweight_by_sign_perbin(JNJQ[a], sign_accum) for a in range(4)
         ], axis=0)
 
-    # 5) Save imaginary time grid if dt is available.
+    # Save imaginary time grid if dt is available.
     dt = _load_dt(path)
     if dt is not None:
         tau = np.arange(L, dtype=float) * dt
         np.save(os.path.join(outdir, f"{args.prefix}tau.npy"), tau)
 
-    # 6) Save sign diagnostics (useful for future sign-problem cases).
+    # Save sign diagnostics (useful for future sign-problem cases).
     np.save(os.path.join(outdir, f"{args.prefix}sign_accum_perbin.npy"), sign_accum)
     np.save(os.path.join(outdir, f"{args.prefix}n_sample_perbin.npy"), n_sample)
     np.save(os.path.join(outdir, f"{args.prefix}mean_sign_perbin.npy"), mean_sign_perbin)
