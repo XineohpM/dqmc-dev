@@ -237,3 +237,8 @@ cython_debug/
 # MacOS
 .DS_Store
 
+# Temporary tests and logs
+slurm_logs/
+
+# Docs
+scripts/*.md

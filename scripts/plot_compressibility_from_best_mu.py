@@ -13,6 +13,26 @@ sys.path.insert(0, str(utilpath))
 
 import util
 
+
+def _validate_jackknife_denominators(sign):
+    sign = np.asarray(sign)
+    total = np.sum(sign)
+    total_abs = np.sum(np.abs(sign))
+    rtol = 1e-12
+    if np.abs(total) <= rtol * total_abs:
+        raise ValueError("total accumulated sign is too close to zero")
+    leave_one_out = total - sign
+    leave_one_out_abs = total_abs - np.abs(sign)
+    if np.any(np.abs(leave_one_out) <= rtol * leave_one_out_abs):
+        bad = np.flatnonzero(
+            np.abs(leave_one_out) <= rtol * leave_one_out_abs
+        )
+        raise ValueError(
+            "jackknife leave-one-out accumulated sign is too close to zero "
+            f"when omitting bin(s) {bad[:10].tolist()}"
+        )
+
+
 def get_meas(mu_dir: str):
     nn, n, sign, mu, nsamp, beta, U, Nx, Ny = util.load(
         mu_dir, "meas_eqlt/nn", "meas_eqlt/density", "meas_eqlt/sign",
@@ -111,45 +131,71 @@ def main():
         n = n[mask]
         nn = nn[mask]
 
-        # Per-bin normalized observables
-        # n_bin is per-site filling <n> for that bin; S_bin is sum_r <n_i n_{i+r}> averaged over i
-        n_bin = n / nsamp
-        S_bin = nn.sum(axis=1) / nsamp
+        # Keep the raw signed accumulators.  Physical observables are formed
+        # once, as ratios of sums over bins, inside jackknife_noniid.
+        density_numerator = n
+        nn_numerator = nn.reshape(nn.shape[0], -1).sum(axis=1)
 
-        # Filter invalid bins (NaN/Inf or zero sign)
-        valid = np.isfinite(sign) & np.isfinite(n_bin) & np.isfinite(S_bin) & (sign != 0)
+        # A single bin may have zero accumulated sign; only non-finite data or
+        # non-positive sample counts make a bin invalid.
+        valid = (
+            np.isfinite(nsamp)
+            & (nsamp > 0)
+            & np.isfinite(sign)
+            & np.isfinite(density_numerator)
+            & np.isfinite(nn_numerator)
+        )
+        nsamp = nsamp[valid]
         sign = sign[valid]
-        n_bin = n_bin[valid]
-        S_bin = S_bin[valid]
+        density_numerator = density_numerator[valid]
+        nn_numerator = nn_numerator[valid]
 
         if sign.size < 3:
             n_bad += 1
+            avg_sign = (
+                float(np.sum(sign) / np.sum(nsamp))
+                if sign.size and np.sum(nsamp) > 0
+                else np.nan
+            )
             rows.append((n_target, T, float(beta[0]) if np.size(beta) else np.nan, float(U[0]) if np.size(U) else np.nan,
-                         float(mu[0]) if np.size(mu) else np.nan, np.nan, np.nan, np.nan, float(np.mean(sign)) if sign.size else np.nan,
+                         float(mu[0]) if np.size(mu) else np.nan, np.nan, np.nan, np.nan, avg_sign,
                          int(sign.size), mu_dir))
             continue
 
-        # Use jackknife on sign-reweighted means, then form chi:
+        # Use a non-i.i.d. ratio jackknife on raw signed accumulators, then
+        # form chi:
         # chi = beta * ( <S> - nsite * <n>^2 )
         bval = float(np.asarray(beta).reshape(-1)[0])
+        _validate_jackknife_denominators(sign)
 
-        def f(sum_s, sum_sS, sum_sn):
-            S_mean = sum_sS / sum_s
-            n_mean = sum_sn / sum_s
+        def f(sum_nsamp, sum_s, sum_nn, sum_n):
+            S_mean = sum_nn / sum_s
+            n_mean = sum_n / sum_s
             return bval * (S_mean - nsite * (n_mean ** 2))
 
-        jk = util.jackknife(sign, sign * S_bin, sign * n_bin, f=f)
+        jk = util.jackknife_noniid(
+            nsamp,
+            sign,
+            nn_numerator,
+            density_numerator,
+            f=f,
+        )
         chi = float(jk[0])
         chi_err = float(jk[1])
 
         # Also report the measured <n> at this mu for sanity
-        jk_n = util.jackknife(sign, sign * n_bin)
+        jk_n = util.jackknife_noniid(
+            nsamp,
+            sign,
+            density_numerator,
+        )
         n_mean = float(jk_n[0])
         n_err = float(jk_n[1])
         dn = n_mean - n_target if np.isfinite(n_target) else np.nan
+        avg_sign = float(np.sum(sign) / np.sum(nsamp))
 
         rows.append((n_target, T, bval, float(np.asarray(U).reshape(-1)[0]), float(np.asarray(mu).reshape(-1)[0]),
-                     chi, chi_err, dn, float(np.mean(sign)), int(sign.size), mu_dir))
+                     chi, chi_err, dn, avg_sign, int(sign.size), mu_dir))
 
     # Sort by target n then T
     rows.sort(key=lambda r: (r[0], r[1]))

@@ -11,6 +11,26 @@ utilpath = Path(__file__).resolve().parents[1] / "util"
 sys.path.insert(0, str(utilpath))
 
 import util
+import paired_bootstrap
+
+
+def _validate_jackknife_denominators(sign):
+    sign = np.asarray(sign)
+    total = np.sum(sign)
+    total_abs = np.sum(np.abs(sign))
+    rtol = paired_bootstrap.DEFAULT_DENOMINATOR_RTOL
+    if np.abs(total) <= rtol * total_abs:
+        raise ValueError("total accumulated sign is too close to zero")
+    leave_one_out = total - sign
+    leave_one_out_abs = total_abs - np.abs(sign)
+    if np.any(np.abs(leave_one_out) <= rtol * leave_one_out_abs):
+        bad = np.flatnonzero(
+            np.abs(leave_one_out) <= rtol * leave_one_out_abs
+        )
+        raise ValueError(
+            "jackknife leave-one-out accumulated sign is too close to zero "
+            f"when omitting bin(s) {bad[:10].tolist()}"
+        )
 
 
 def parse_T_beta_U(t_dir: Path):
@@ -61,12 +81,14 @@ def load_mu_density_bins(mu_dir: Path):
         mu
         n_mean
         n_err
-        n_bins_raw: per-bin per-site density, shape (n_bins_valid,)
+        density_numerator: raw signed per-site density accumulator,
+            shape (n_bins_valid, 1)
         sign
+        n_sample
         nsite
 
-    The mean/error for n(mu) is computed through util.jackknife(sign, N),
-    consistent with get_n_from_best_mu.py.
+    The mean/error for n(mu) is computed from raw accumulators through
+    util.jackknife_noniid(n_sample, sign, density_numerator).
     """
     mu_dir_s = with_trailing_slash(mu_dir)
 
@@ -93,11 +115,13 @@ def load_mu_density_bins(mu_dir: Path):
 
     valid = (
         mask
+        & np.isfinite(n_sample)
+        & (n_sample > 0)
         & np.isfinite(sign)
         & np.isfinite(dsum)
-        & (sign != 0)
     )
 
+    n_sample = n_sample[valid]
     sign = sign[valid]
     dsum = dsum[valid]
 
@@ -108,29 +132,31 @@ def load_mu_density_bins(mu_dir: Path):
             "mu": mu,
             "n_mean": np.nan,
             "n_err": np.nan,
-            "n_bins_raw": np.array([], dtype=float),
+            "density_numerator": np.empty((0, 1), dtype=float),
             "sign": np.array([], dtype=float),
+            "n_sample": np.array([], dtype=float),
             "nsite": nsite,
             "mu_dir": mu_dir,
         }
 
-    # util.jackknife returns mean and stderr for sign-weighted observable.
-    N_mean, N_err = util.jackknife(sign, dsum)
+    density_numerator = (dsum / nsite)[:, None]
 
-    n_mean = N_mean / nsite
-    n_err = N_err / nsite
-
-    # Raw per-bin density used for the final jackknife over kappa.
-    # For attractive Hubbard sign should be essentially +1, so this is the
-    # natural raw bin observable for the n(mu) slope.
-    n_bins_raw = dsum / nsite
+    # Completed bins have equal n_sample, but retain it in the estimator so
+    # the raw paired-bin contract remains explicit.
+    _validate_jackknife_denominators(sign)
+    n_mean, n_err = util.jackknife_noniid(
+        n_sample,
+        sign,
+        density_numerator,
+    )
 
     return {
         "mu": mu,
-        "n_mean": n_mean,
-        "n_err": n_err,
-        "n_bins_raw": n_bins_raw,
+        "n_mean": float(np.asarray(n_mean).reshape(-1)[0]),
+        "n_err": float(np.asarray(n_err).reshape(-1)[0]),
+        "density_numerator": density_numerator,
         "sign": sign,
+        "n_sample": n_sample,
         "nsite": nsite,
         "mu_dir": mu_dir,
     }
@@ -184,14 +210,24 @@ def choose_local_window(mu, n_mean, n_err, filling, window, min_points, range_to
     return idx_f[start:end]
 
 
-def compute_kappa_for_T_dir(t_dir: Path, filling: float, window: int, min_points: int, range_tol: float):
+def compute_kappa_for_T_dir(
+    t_dir: Path,
+    filling: float,
+    window: int,
+    min_points: int,
+    range_tol: float,
+    nboot: int,
+    seed: int,
+    bootstrap_block_size: int,
+):
     """
     For one T*_beta*_U*/ directory:
       1. load all mu*/ density bins;
       2. build n(mu);
       3. choose local window around target filling;
       4. compute dn/dmu by local linear fit;
-      5. compute jackknife error from per-bin local slopes using util.jackknife.
+      5. independently paired-bootstrap each mu dataset and fit every
+         resampled n(mu) curve.
     """
     T, beta, U = parse_T_beta_U(t_dir)
     mu_dirs = sorted([p for p in t_dir.glob("mu*/") if p.is_dir()])
@@ -212,7 +248,11 @@ def compute_kappa_for_T_dir(t_dir: Path, filling: float, window: int, min_points
     for mu_dir in mu_dirs:
         try:
             item = load_mu_density_bins(mu_dir)
-            if np.isfinite(item["mu"]) and np.isfinite(item["n_mean"]) and item["n_bins_raw"].size >= 3:
+            if (
+                np.isfinite(item["mu"])
+                and np.isfinite(item["n_mean"])
+                and item["density_numerator"].shape[0] >= 3
+            ):
                 data.append(item)
         except Exception as e:
             print(f"[WARN] failed to load {mu_dir}: {e}", file=sys.stderr)
@@ -290,11 +330,33 @@ def compute_kappa_for_T_dir(t_dir: Path, filling: float, window: int, min_points
     else:
         mu_at_n = (filling - b_mean) / a_mean
 
-    # Build per-bin local slopes. Truncate to common valid bin count across selected mu dirs.
+    # Each mu directory is an independent simulation.  Bootstrap its paired
+    # (density numerator, sign, n_sample) bins independently; do not align bin
+    # indices across different mu values.
     selected_data = [data[i] for i in idx]
-    min_bins = min(d["n_bins_raw"].size for d in selected_data)
+    rng = np.random.default_rng(seed)
+    n_boot = np.empty((nboot, len(selected_data)), dtype=float)
+    for imu, item in enumerate(selected_data):
+        nbin = item["density_numerator"].shape[0]
+        indices = paired_bootstrap.bootstrap_indices(
+            nbin,
+            nboot,
+            block_size=bootstrap_block_size,
+            rng=rng,
+        )
+        estimates = paired_bootstrap.bootstrap_ratio_of_sums(
+            item["density_numerator"],
+            item["sign"],
+            indices,
+        )
+        n_boot[:, imu] = np.asarray(estimates).reshape(nboot)
 
-    if min_bins < 3:
+    mu_centered = mu_sel - np.mean(mu_sel)
+    slope_denominator = np.sum(mu_centered ** 2)
+    slopes = (n_boot @ mu_centered) / slope_denominator
+    finite_slopes = slopes[np.isfinite(slopes)]
+
+    if finite_slopes.size < 2:
         return {
             "T": T,
             "beta": beta,
@@ -302,40 +364,15 @@ def compute_kappa_for_T_dir(t_dir: Path, filling: float, window: int, min_points
             "mu_at_n": mu_at_n,
             "kappa": np.nan,
             "kappa_err": np.nan,
+            "kappa_p16": np.nan,
+            "kappa_p84": np.nan,
             "n_mu_points": len(data),
-            "status": "too_few_bins_for_jackknife",
+            "status": "too_few_finite_bootstrap_slopes",
         }
 
-    slopes = []
-    for ib in range(min_bins):
-        y = np.array([d["n_bins_raw"][ib] for d in selected_data], dtype=float)
-        if not np.isfinite(y).all():
-            continue
-        try:
-            a_bin, _ = np.polyfit(mu_sel, y, deg=1)
-            if np.isfinite(a_bin):
-                slopes.append(a_bin)
-        except Exception:
-            continue
-
-    slopes = np.asarray(slopes, dtype=float)
-
-    if slopes.size < 3:
-        return {
-            "T": T,
-            "beta": beta,
-            "U": U,
-            "mu_at_n": mu_at_n,
-            "kappa": np.nan,
-            "kappa_err": np.nan,
-            "n_mu_points": len(data),
-            "status": "too_few_finite_slopes",
-        }
-
-    # Final jackknife error analysis through util.jackknife.
-    # With unit weights this is the ordinary jackknife over per-bin slope estimates.
-    unit_weight = np.ones_like(slopes)
-    kappa, kappa_err = util.jackknife(unit_weight, slopes)
+    kappa = float(a_mean)
+    kappa_err = float(np.std(finite_slopes, ddof=1))
+    kappa_p16, kappa_p84 = np.percentile(finite_slopes, [16.0, 84.0])
 
     return {
         "T": T,
@@ -344,6 +381,8 @@ def compute_kappa_for_T_dir(t_dir: Path, filling: float, window: int, min_points
         "mu_at_n": mu_at_n,
         "kappa": kappa,
         "kappa_err": kappa_err,
+        "kappa_p16": float(kappa_p16),
+        "kappa_p84": float(kappa_p84),
         "n_mu_points": len(data),
         "status": "ok",
     }
@@ -393,6 +432,24 @@ def main():
         ),
     )
     parser.add_argument(
+        "--nboot",
+        type=int,
+        default=1000,
+        help="Number of independent paired-bootstrap slope samples. Default: 1000.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=12345,
+        help="Random seed for paired bootstrap. Default: 12345.",
+    )
+    parser.add_argument(
+        "--bootstrap-block-size",
+        type=int,
+        default=1,
+        help="Circular paired-bootstrap block size within each mu dataset. Default: 1.",
+    )
+    parser.add_argument(
         "--output-prefix",
         default=None,
         help=(
@@ -401,6 +458,11 @@ def main():
         ),
     )
     args = parser.parse_args()
+
+    if args.nboot < 2:
+        raise ValueError("--nboot must be at least 2")
+    if args.bootstrap_block_size < 1:
+        raise ValueError("--bootstrap-block-size must be at least 1")
 
     base = Path(args.path).expanduser().resolve()
     if not base.is_dir():
@@ -426,6 +488,9 @@ def main():
             window=args.window,
             min_points=args.min_points,
             range_tol=args.range_tol,
+            nboot=args.nboot,
+            seed=args.seed + len(results),
+            bootstrap_block_size=args.bootstrap_block_size,
         )
         results.append(res)
 
@@ -445,6 +510,14 @@ def main():
     mu_at_n_arr = np.array([r["mu_at_n"] for r in results], dtype=float)
     kappa_arr = np.array([r["kappa"] for r in results], dtype=float)
     kappa_err_arr = np.array([r["kappa_err"] for r in results], dtype=float)
+    kappa_p16_arr = np.array(
+        [r.get("kappa_p16", np.nan) for r in results],
+        dtype=float,
+    )
+    kappa_p84_arr = np.array(
+        [r.get("kappa_p84", np.nan) for r in results],
+        dtype=float,
+    )
     n_mu_points_arr = np.array([r["n_mu_points"] for r in results], dtype=int)
     status_arr = np.array([r["status"] for r in results], dtype=object)
 
@@ -456,6 +529,8 @@ def main():
     np.save(str(out_prefix) + "_mu_at_n.npy", mu_at_n_arr)
     np.save(str(out_prefix) + "_kappa.npy", kappa_arr)
     np.save(str(out_prefix) + "_kappa_err.npy", kappa_err_arr)
+    np.save(str(out_prefix) + "_kappa_p16.npy", kappa_p16_arr)
+    np.save(str(out_prefix) + "_kappa_p84.npy", kappa_p84_arr)
     np.save(str(out_prefix) + "_n_mu_points.npy", n_mu_points_arr)
     np.save(str(out_prefix) + "_status.npy", status_arr)
 
@@ -470,6 +545,8 @@ def main():
     print(f"  {out_prefix}_mu_at_n.npy")
     print(f"  {out_prefix}_kappa.npy")
     print(f"  {out_prefix}_kappa_err.npy")
+    print(f"  {out_prefix}_kappa_p16.npy")
+    print(f"  {out_prefix}_kappa_p84.npy")
     print(f"  {out_prefix}_n_mu_points.npy")
     print(f"  {out_prefix}_status.npy")
 
