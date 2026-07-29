@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 utilpath = Path(__file__).resolve().parents[1]/"util"
 sys.path.insert(0, str(utilpath))
 import util
+import paired_bootstrap
 
 
 def ensure_trailing_slash(path):
@@ -22,8 +23,9 @@ def ensure_trailing_slash(path):
 
 def get_basic_meas(path: str):
     path = ensure_trailing_slash(path)
-    sign, beta, density, double_occ, g00 = util.load(
+    n_sample, sign, beta, density, double_occ, g00 = util.load(
         path,
+        "meas_eqlt/n_sample",
         "meas_eqlt/sign",
         "metadata/beta",
         "meas_eqlt/density",
@@ -32,10 +34,22 @@ def get_basic_meas(path: str):
     )
 
     out = {
-        "sign": dataset_to_bin_series(sign),
-        "density": dataset_to_bin_series(density),
-        "double_occ": dataset_to_bin_series(double_occ),
-        "g00": dataset_to_bin_series(g00),
+        "sign_phase_raw_per_sample": dataset_to_bin_series(
+            sign,
+            n_sample=n_sample,
+        ),
+        "density_raw_per_sample": dataset_to_bin_series(
+            density,
+            n_sample=n_sample,
+        ),
+        "double_occ_raw_per_sample": dataset_to_bin_series(
+            double_occ,
+            n_sample=n_sample,
+        ),
+        "g00_raw_per_sample": dataset_to_bin_series(
+            g00,
+            n_sample=n_sample,
+        ),
     }
 
     beta_arr = np.asarray(beta, dtype=float).reshape(-1)
@@ -84,7 +98,7 @@ def sem(x):
         return np.nan
     return np.std(x, ddof=1) / np.sqrt(len(x))
 
-def dataset_to_bin_series(arr, nbin=None):
+def dataset_to_bin_series(arr, n_sample=None):
     arr = np.asarray(arr)
 
     if arr.size == 0 or arr.ndim == 0:
@@ -97,7 +111,26 @@ def dataset_to_bin_series(arr, nbin=None):
     if arr.ndim == 1:
         y = arr.astype(float)
     else:
-        y = np.nanmean(arr.reshape(arr.shape[0], -1), axis=1).astype(float)
+        flat = arr.reshape(arr.shape[0], -1).astype(float)
+        finite_count = np.count_nonzero(np.isfinite(flat), axis=1)
+        y = np.full(arr.shape[0], np.nan, dtype=float)
+        np.divide(
+            np.nansum(flat, axis=1),
+            finite_count,
+            out=y,
+            where=finite_count > 0,
+        )
+
+    if n_sample is not None:
+        n_sample = np.asarray(n_sample, dtype=float).reshape(-1)
+        if n_sample.shape != y.shape:
+            raise ValueError(
+                f"n_sample shape {n_sample.shape} does not match "
+                f"bin series shape {y.shape}"
+            )
+        if not np.all(np.isfinite(n_sample)) or np.any(n_sample <= 0):
+            raise ValueError("n_sample must be finite and positive")
+        y = y / n_sample
 
     if len(y) < 4:
         return None
@@ -170,7 +203,7 @@ def plot_series(y, title, png_path):
     fig = plt.figure(figsize=(7, 4.5))
     plt.plot(x, y, marker="o", markersize=2, linewidth=1)
     plt.xlabel("bin index")
-    plt.ylabel("per-bin value")
+    plt.ylabel("diagnostic value")
     plt.title(title)
     plt.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -187,7 +220,7 @@ def plot_running_mean(y, title, png_path):
     fig = plt.figure(figsize=(7, 4.5))
     plt.plot(ks, rm, linewidth=1.5)
     plt.xlabel("number of initial measured bins discarded")
-    plt.ylabel("mean after discard")
+    plt.ylabel("mean diagnostic value after discard")
     plt.title(title)
     plt.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -198,25 +231,83 @@ def plot_running_mean(y, title, png_path):
 def load_optional_h5_obs(path, obs_name):
     path = ensure_trailing_slash(path)
     try:
-        arr, = util.load(path, f"meas_eqlt/{obs_name}")
+        n_sample, arr = util.load(
+            path,
+            "meas_eqlt/n_sample",
+            f"meas_eqlt/{obs_name}",
+        )
     except Exception as e:
         print(f"[WARN] failed to read meas_eqlt/{obs_name} under {path}: {e}")
         return None
-    return dataset_to_bin_series(arr)
+    return dataset_to_bin_series(arr, n_sample=n_sample)
 
 
-def load_optional_npy_series(path, filename):
-    path = Path(path)
-    npy_path = path / filename
-    if not npy_path.exists():
-        print(f"[WARN] missing {npy_path}")
-        return None
+def prefix_ratio_of_sums_series(numerator, sign):
+    numerator = np.asarray(numerator)
+    sign = np.asarray(sign)
+    if numerator.ndim != 2:
+        raise ValueError(
+            f"numerator must have shape (Nbin, L), got {numerator.shape}"
+        )
+    if sign.shape != (numerator.shape[0],):
+        raise ValueError(
+            f"sign shape {sign.shape} does not match Nbin={numerator.shape[0]}"
+        )
+
+    cumulative_numerator = np.cumsum(numerator, axis=0)
+    cumulative_sign = np.cumsum(sign)
+    cumulative_absolute_sign = np.cumsum(np.abs(sign))
+    bad = np.abs(cumulative_sign) <= (
+        paired_bootstrap.DEFAULT_DENOMINATOR_RTOL
+        * cumulative_absolute_sign
+    )
+
+    ratios = np.full(
+        cumulative_numerator.shape,
+        np.nan,
+        dtype=np.result_type(numerator.dtype, sign.dtype, np.float64),
+    )
+    good = ~bad
+    ratios[good] = (
+        cumulative_numerator[good].T / cumulative_sign[good]
+    ).T
+    return dataset_to_bin_series(ratios), np.flatnonzero(bad)
+
+
+def load_optional_paired_diagnostics(path, filename):
+    bundle_path = Path(path) / filename
+    if not bundle_path.exists():
+        print(f"[WARN] missing {bundle_path}")
+        return {}
     try:
-        arr = np.load(npy_path)
+        bundle = paired_bootstrap.load_paired_bundle(bundle_path)
     except Exception as e:
-        print(f"[WARN] failed to read {npy_path}: {e}")
-        return None
-    return dataset_to_bin_series(arr)
+        print(f"[WARN] failed to read {bundle_path}: {e}")
+        return {}
+
+    stem = bundle_path.stem
+    prefix_ratio, bad_prefixes = prefix_ratio_of_sums_series(
+        bundle.numerator,
+        bundle.sign,
+    )
+    if bad_prefixes.size:
+        print(
+            f"[WARN] {bundle_path}: prefix accumulated sign/phase is too "
+            f"close to zero at bin index/indices "
+            f"{bad_prefixes[:10].tolist()}; recording NaN for those prefixes"
+        )
+
+    return {
+        f"{stem}__raw_numerator_per_sample": dataset_to_bin_series(
+            bundle.numerator,
+            n_sample=bundle.n_sample,
+        ),
+        f"{stem}__sign_phase_per_sample": dataset_to_bin_series(
+            bundle.sign,
+            n_sample=bundle.n_sample,
+        ),
+        f"{stem}__prefix_ratio_of_sums": prefix_ratio,
+    }
 
 
 def analyze_and_plot_observable(path, rel, obs_name, y, file_out, summary_rows):
@@ -279,12 +370,13 @@ def main():
     p.add_argument(
         "--JNJN",
         action="store_true",
-        help="Also check JNJN_xx_perbin.npy in each matched subdirectory.",
+        help="Also diagnose JNJN_xx_paired.npz in each matched subdirectory.",
     )
     p.add_argument(
         "--g1p",
         action="store_true",
-        help="Also check 1_particle_local_g_all.npy in each matched subdirectory.",
+        help=("Also diagnose 1_particle_local_g_paired.npz in each matched "
+              "subdirectory."),
     )
     args = p.parse_args()
 
@@ -323,9 +415,14 @@ def main():
             basic = get_basic_meas(path)
         except Exception as e:
             print(f"[WARN] failed to read basic measurements under {path}: {e}")
-            continue
+            basic = {}
 
-        for obs_name in ["sign", "density", "double_occ", "g00"]:
+        for obs_name in [
+            "sign_phase_raw_per_sample",
+            "density_raw_per_sample",
+            "double_occ_raw_per_sample",
+            "g00_raw_per_sample",
+        ]:
             analyze_and_plot_observable(
                 path,
                 rel,
@@ -340,33 +437,41 @@ def main():
             analyze_and_plot_observable(
                 path,
                 rel,
-                obs_name,
+                f"{obs_name}_raw_per_sample",
                 y,
                 file_out,
                 summary_rows,
             )
 
         if args.JNJN:
-            y = load_optional_npy_series(path, "JNJN_xx_perbin.npy")
-            analyze_and_plot_observable(
+            diagnostics = load_optional_paired_diagnostics(
                 path,
-                rel,
-                "JNJN_xx_perbin",
-                y,
-                file_out,
-                summary_rows,
+                "JNJN_xx_paired.npz",
             )
+            for obs_name, y in diagnostics.items():
+                analyze_and_plot_observable(
+                    path,
+                    rel,
+                    obs_name,
+                    y,
+                    file_out,
+                    summary_rows,
+                )
 
         if args.g1p:
-            y = load_optional_npy_series(path, "1_particle_local_g_all.npy")
-            analyze_and_plot_observable(
+            diagnostics = load_optional_paired_diagnostics(
                 path,
-                rel,
-                "1_particle_local_g_all",
-                y,
-                file_out,
-                summary_rows,
+                "1_particle_local_g_paired.npz",
             )
+            for obs_name, y in diagnostics.items():
+                analyze_and_plot_observable(
+                    path,
+                    rel,
+                    obs_name,
+                    y,
+                    file_out,
+                    summary_rows,
+                )
 
     if not summary_rows:
         raise SystemExit("No usable per-bin observables found.")
@@ -383,6 +488,10 @@ def main():
     print(f"Plots written under: {outdir}")
     print()
     print("Interpretation guide:")
+    print("  *_raw_per_sample: raw signed accumulator divided by n_sample;")
+    print("                    it is a warmup diagnostic, not a physical mean")
+    print("  *__prefix_ratio_of_sums: cumulative physical estimator with")
+    print("                           near-zero sign/phase prefixes set to NaN")
     print("  z_halves > 2     : first half and second half differ noticeably")
     print("  slope_z > 2      : visible monotonic drift is likely")
     print("  Neff small       : autocorrelation is strong; error bars may be too optimistic")

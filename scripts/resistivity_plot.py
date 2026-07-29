@@ -304,9 +304,8 @@ def sigma_to_rho(dc_sigma: np.ndarray):
 
     Returns:
         rho_mean: mean of rho samples.
-        yerr: shape (2,) array with [rho - p16, p84 - rho].
-        rho_p16, rho_p84: percentiles.
-        rho_stderr: standard error of the mean of rho samples (NaN if ngood<2).
+        yerr: shape (2,) symmetric bootstrap standard errors.
+        rho_bootstrap_se: bootstrap estimate of the standard error of rho.
         nsamp: number of samples used.
     """
 
@@ -319,10 +318,19 @@ def sigma_to_rho(dc_sigma: np.ndarray):
     rho = 1.0 / sigma
     # TODO: mean or median?
     rho_mean = float(np.mean(rho))
-    rho_p16, rho_p84 = np.percentile(rho, [16, 84])
-    rho_stderr = float(np.std(rho, ddof=1) / np.sqrt(ngood))
-    yerr = np.array([rho_stderr, rho_stderr], dtype=float)
-    return rho_mean, yerr, float(rho_p16), float(rho_p84), rho_stderr, ngood
+    # The spread of bootstrap estimator replicates is the bootstrap estimate
+    # of the physical standard error; do not divide it by sqrt(ngood).
+    rho_bootstrap_se = float(np.std(rho, ddof=1))
+    yerr = np.array(
+        [rho_bootstrap_se, rho_bootstrap_se],
+        dtype=float,
+    )
+    return (
+        rho_mean,
+        yerr,
+        rho_bootstrap_se,
+        ngood,
+    )
 
 def load_proxy(npz_path):
     d = np.load(npz_path, allow_pickle=True)
@@ -336,8 +344,6 @@ def load_proxy(npz_path):
     if T.shape != rho.shape:
         raise ValueError(f"shape mismatch in {npz_path}: T {T.shape} vs rho {rho.shape}")
     
-    rho_p16 = d.get("rho_p16", np.full_like(rho, np.nan)).astype(float)
-    rho_p84 = d.get("rho_p84", np.full_like(rho, np.nan)).astype(float)
     rho_stderr = d.get("rho_stderr", np.full_like(rho, np.nan)).astype(float)
     yerr = np.vstack([rho_stderr, rho_stderr])
     return T, rho, yerr, rho_stderr
@@ -476,7 +482,12 @@ def main():
             sigma_dc_samples, n_good, n_tot = load_dc_sigma(dpath, prefix,
                                                             divide_pi=args.divide_pi,
                                                             dc_method=args.dc_method)
-            rho_mean, yerr, rho_p16, rho_p84, rho_stderr, nsamp = sigma_to_rho(sigma_dc_samples)
+            (
+                rho_mean,
+                yerr,
+                rho_bootstrap_se,
+                nsamp,
+            ) = sigma_to_rho(sigma_dc_samples)
         except Exception as e:
             print(f"[SKIP MaxEnt] {relpath}: {type(e).__name__}: {e}")
             continue

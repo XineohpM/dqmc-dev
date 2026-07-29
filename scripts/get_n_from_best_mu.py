@@ -8,6 +8,26 @@ utilpath = Path(__file__).resolve().parents[1]/"util"
 sys.path.insert(0, str(utilpath))
 
 import util
+import paired_bootstrap
+
+
+def _validate_jackknife_denominators(sign):
+    sign = np.asarray(sign)
+    total = np.sum(sign)
+    total_abs = np.sum(np.abs(sign))
+    rtol = paired_bootstrap.DEFAULT_DENOMINATOR_RTOL
+    if np.abs(total) <= rtol * total_abs:
+        raise ValueError("total accumulated sign/phase is too close to zero")
+
+    leave_one_out = total - sign
+    leave_one_out_abs = total_abs - np.abs(sign)
+    bad = np.abs(leave_one_out) <= rtol * leave_one_out_abs
+    if np.any(bad):
+        indices = np.flatnonzero(bad)[:10].tolist()
+        raise ValueError(
+            "jackknife leave-one-out accumulated sign/phase is too close "
+            f"to zero when omitting bin(s) {indices}"
+        )
 
 def get_mu_n(path):
     '''From all files in path, get chemical potential and filling info
@@ -19,16 +39,51 @@ def get_mu_n(path):
     n_sample, sign, density = \
         util.load(path, "meas_eqlt/n_sample", "meas_eqlt/sign",
                         "meas_eqlt/density")
-    mask = (n_sample == n_sample.max())
-    if not mask.all():
-        print(f"{path} incomplete: {mask.sum()}/{len(n_sample)}")
-    sign, density = sign[mask], density[mask]
-    dsum = density.sum(1)
-    valid = (np.isfinite(sign)) & (np.isfinite(dsum)) & (sign != 0)
-    sign = sign[valid]; density = density[valid]; dsum = dsum[valid]
+
+    n_sample = np.asarray(n_sample).reshape(-1)
+    sign = np.asarray(sign).reshape(-1)
+    density = np.asarray(density)
+    if density.ndim == 0:
+        raise ValueError("density must have a bin dimension")
+    if not (
+        density.shape[0] == sign.size == n_sample.size
+    ):
+        raise ValueError(
+            "n_sample/sign/density bin count mismatch: "
+            f"{n_sample.size}/{sign.size}/{density.shape[0]}"
+        )
+
+    dsum = density.reshape(density.shape[0], -1).sum(axis=1)
+    valid = (
+        np.isfinite(n_sample)
+        & (n_sample > 0)
+        & np.isfinite(sign)
+        & np.isfinite(dsum)
+    )
+    if not np.any(valid):
+        return util.load_firstfile(path, "metadata/mu")[0], np.nan, np.nan
+
+    n_sample = n_sample[valid]
+    sign = sign[valid]
+    dsum = dsum[valid]
+
+    completed = n_sample == np.max(n_sample)
+    if not completed.all():
+        print(
+            f"{path} incomplete: "
+            f"{completed.sum()}/{len(completed)} valid bins completed"
+        )
+    n_sample = n_sample[completed]
+    sign = sign[completed]
+    dsum = dsum[completed]
+
     if sign.size < 3:
         return util.load_firstfile(path, "metadata/mu")[0], np.nan, np.nan
-    nj = util.jackknife(sign, dsum)
+
+    # A completed bin with zero accumulated sign remains part of both sums.
+    # Reject only unstable full-sample or leave-one-out denominators.
+    _validate_jackknife_denominators(sign)
+    nj = util.jackknife_noniid(n_sample, sign, dsum)
 
     return util.load_firstfile(path, "metadata/mu")[0], nj[0], nj[1]
 

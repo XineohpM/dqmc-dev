@@ -42,8 +42,13 @@ def load_sigma(dpath: str, prefix: str, divide_pi: bool = True):
     Load omega and s_all, drop bootstrap rows that are not finite, then return:
       omega: (Nw,)
       sigma_mean: (Nw,)
-      sigma_stderr: (Nw,)  (standard error across bootstrap samples)
+      sigma_bootstrap_std: (Nw,)  (bootstrap uncertainty)
       n_good, n_tot
+
+    The bootstrap standard deviation estimates the sampling uncertainty of the
+    spectrum.  It must not be divided by sqrt(number of bootstrap replicates).
+    With only one valid spectrum the uncertainty is undefined and returned as
+    NaN.
     """
     sp = os.path.join(dpath, prefix + "s_all.npy")
     wp = os.path.join(dpath, prefix + "omega.npy")
@@ -66,9 +71,13 @@ def load_sigma(dpath: str, prefix: str, divide_pi: bool = True):
         good = good / np.pi
 
     sigma_mean = good.mean(axis=0)
-    sigma_stderr = good.std(axis=0, ddof=1) / np.sqrt(n_good) if n_good > 1 else np.zeros_like(sigma_mean)
+    sigma_bootstrap_std = (
+        good.std(axis=0, ddof=1)
+        if n_good > 1
+        else np.full_like(sigma_mean, np.nan, dtype=float)
+    )
 
-    return omega, sigma_mean, sigma_stderr, n_good, n_tot
+    return omega, sigma_mean, sigma_bootstrap_std, n_good, n_tot
 
 def main():
     ap = argparse.ArgumentParser(
@@ -90,7 +99,7 @@ def main():
     ap.add_argument("--ymax", type=float, default=None,
                     help="Optional y-axis max. Default: auto.")
     ap.add_argument("--no_band", action="store_true",
-                    help="If set, do not draw the standard-error band.")
+                    help="If set, do not draw the bootstrap-uncertainty band.")
     args = ap.parse_args()
 
     curves = []
@@ -99,8 +108,18 @@ def main():
         T = float(Tstr)
         dpath = os.path.join(args.base, rel)
 
-        omega, mu, stderr, ng, nt = load_sigma(dpath, pfx, divide_pi=args.divide_pi)
-        curves.append((T, omega, mu, stderr, ng, nt))
+        omega, mu, bootstrap_std, ng, nt = load_sigma(
+            dpath,
+            pfx,
+            divide_pi=args.divide_pi,
+        )
+        if ng < 2 and not args.no_band:
+            raise RuntimeError(
+                f"Only one valid bootstrap spectrum in {dpath} "
+                f"(prefix={pfx}); use --no_band or provide at least two "
+                "valid spectra"
+            )
+        curves.append((T, omega, mu, bootstrap_std, ng, nt))
 
     # Sort by T descending (optional); change to ascending if you prefer
     curves.sort(key=lambda x: x[0], reverse=True)
@@ -115,9 +134,9 @@ def main():
     ymin = +np.inf
     ymax = -np.inf
 
-    for i, (T, w, mu, stderr, ng, nt) in enumerate(curves):
-        lower = mu - stderr
-        upper = mu + stderr
+    for i, (T, w, mu, bootstrap_std, ng, nt) in enumerate(curves):
+        lower = mu - bootstrap_std
+        upper = mu + bootstrap_std
         xmax = max(xmax, float(np.max(w)))
         ymin = min(ymin, float(np.min(lower if not args.no_band else mu)))
         ymax = max(ymax, float(np.max(upper if not args.no_band else mu)))
