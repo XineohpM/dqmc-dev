@@ -203,6 +203,54 @@ def test_outer_spectrum_bootstrap_resamples_append_with_correlator(monkeypatch):
     assert results["s"].shape == (3, 2)
 
 
+def test_fermion_preprocess_restores_same_row_endpoint(monkeypatch):
+    chi = np.arange(24.0).reshape(6, 4) / 30.0
+    seen = []
+
+    def fake_preprocess(
+        sampled_chi,
+        dt,
+        beta,
+        *,
+        grid_info,
+        op_type,
+        sym,
+        model_arr,
+        append,
+    ):
+        wrong_endpoint = 1.0 - sampled_chi[::-1, :1]
+        return {
+            "tau": np.arange(sampled_chi.shape[1] + 1, dtype=float) * dt,
+            "lhs": np.concatenate((sampled_chi, wrong_endpoint), axis=1),
+            "K": np.zeros((sampled_chi.shape[1] + 1, 2)),
+            "norm": 1.0,
+            "m": np.array([0.5, 0.5]),
+        }
+
+    def fake_maxent(pre, **kwargs):
+        seen.append(pre["lhs"].copy())
+        return np.array([0.4, 0.6])
+
+    monkeypatch.setattr(phoenix.maxent, "Preprocess", fake_preprocess)
+    monkeypatch.setattr(phoenix.maxent, "MaxEnt", fake_maxent)
+
+    results = phoenix.perform_maxent(
+        chi,
+        (np.array([-1.0, 1.0]), np.ones(2)),
+        {"dt": 0.1, "beta": 0.4, "L": 4},
+        alpha_arr=np.array([1.0, 10.0]),
+        bs=3,
+        op_type="fermion",
+        sym=False,
+        rng=np.random.default_rng(29),
+    )
+
+    assert len(seen) == 3
+    for lhs in seen:
+        np.testing.assert_allclose(lhs[:, -1], 1.0 - lhs[:, 0])
+    assert results["s"].shape == (3, 2)
+
+
 def test_phoenix_main_loads_paired_bundle_without_beta_or_dt(
     tmp_path,
     monkeypatch,

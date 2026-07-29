@@ -233,6 +233,50 @@ def prepare_paired_maxent_input(
             "indices": indices,
         }
 
+
+def _preprocess_maxent_rows(
+        rows,
+        dt,
+        beta,
+        *,
+        grid_info,
+        op_type,
+        sym,
+        model_arr,
+        append,
+):
+        """Preprocess rows while preserving the fermionic endpoint pairing.
+
+        ``maxent.Preprocess`` constructs the fermionic tau=beta endpoint from
+        an independently resampled tau=0 column.  That destroys the row-wise
+        covariance carried by the surrogate rows.  Restore the exact
+        same-row sum rule G(beta) = 1 - G(0) in the wrapper without changing
+        the sign-unaware maxent implementation.
+        """
+
+        pre = maxent.Preprocess(
+            rows,
+            dt,
+            beta,
+            grid_info=grid_info,
+            op_type=op_type,
+            sym=sym,
+            model_arr=model_arr,
+            append=append,
+        )
+        if op_type == "fermion":
+            lhs = np.array(pre["lhs"], copy=True)
+            expected_shape = (rows.shape[0], rows.shape[1] + 1)
+            if lhs.shape != expected_shape:
+                raise ValueError(
+                    "Fermionic preprocessing returned lhs shape "
+                    f"{lhs.shape}; expected {expected_shape}"
+                )
+            lhs[:, -1] = 1.0 - lhs[:, 0]
+            pre["lhs"] = lhs
+        return pre
+
+
 #Adapted from Emily's run_maxent.py code
 def perform_maxent(chi,  omega_grid, metadata, 
                    append=None, alpha_arr=np.logspace(1,9,1+20*(9-1)),
@@ -309,8 +353,16 @@ def perform_maxent(chi,  omega_grid, metadata,
                 append_resampled = None if append is None else append[resample]
 
                 # preprocess data for maxent
-                pre = maxent.Preprocess(chi[resample], dt, beta, grid_info = (omega,domega),
-                                        op_type = op_type, sym=sym, model_arr = anneal_arr, append=append_resampled)
+                pre = _preprocess_maxent_rows(
+                    chi[resample],
+                    dt,
+                    beta,
+                    grid_info=(omega, domega),
+                    op_type=op_type,
+                    sym=sym,
+                    model_arr=anneal_arr,
+                    append=append_resampled,
+                )
                 
                 # drop extra datapoint if nonsymmetric bosonic kernel
                 if drop:
