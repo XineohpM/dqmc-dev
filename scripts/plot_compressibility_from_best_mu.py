@@ -149,10 +149,12 @@ def main():
             return bval * (S_mean - nsite * (n_mean ** 2))
 
         def f_inverse(sum_nsamp, sum_s, sum_nn, sum_n):
-            chi_value = f(sum_nsamp, sum_s, sum_nn, sum_n)
-            if not np.isfinite(chi_value) or chi_value == 0.0:
-                return np.nan
-            return 1.0 / chi_value
+            chi_value = np.asarray(
+                f(sum_nsamp, sum_s, sum_nn, sum_n), dtype=float
+            )
+            chi_inverse = np.full_like(chi_value, np.nan, dtype=float)
+            valid = np.isfinite(chi_value) & (chi_value != 0.0)
+            return np.divide(1.0, chi_value, out=chi_inverse, where=valid)
 
         jk_chi = util.jackknife_noniid(
             nsamp,
