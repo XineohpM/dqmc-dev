@@ -91,6 +91,34 @@ def energy(file, tp=0):
     return e
 
 
+def completed_bin_files(files, run_path):
+    """Return bins whose n_sample equals the largest positive bin size."""
+    bins_nsamp = []
+    for file in files:
+        nsamp = util.load_file(file, "meas_eqlt/n_sample")[0]
+        nsamp = np.asarray(nsamp, dtype=float).reshape(-1)
+        if nsamp.size != 1:
+            raise ValueError(
+                f"Unexpected n_sample shape in {file}: {nsamp.shape}"
+            )
+        bins_nsamp.append(float(nsamp[0]))
+
+    bins_nsamp = np.asarray(bins_nsamp, dtype=float)
+    if np.any(~np.isfinite(bins_nsamp)):
+        raise ValueError(f"Non-finite n_sample encountered in {run_path}")
+    if bins_nsamp.size == 0 or np.max(bins_nsamp) <= 0:
+        raise ValueError(f"No completed positive-size bins found in {run_path}")
+
+    completed = bins_nsamp == np.max(bins_nsamp)
+    completed_files = [file for file, keep in zip(files, completed) if keep]
+    if not np.all(completed):
+        print(
+            f"[info] {run_path}: using {len(completed_files)}/{len(files)} "
+            f"completed bins with n_sample={np.max(bins_nsamp):g}"
+        )
+    return completed_files
+
+
 def diff(subdirs, tp):
     T_list = []
     E_mean_list = []
@@ -103,8 +131,9 @@ def diff(subdirs, tp):
         files = sorted(glob.glob(os.path.join(d, "*.h5")))
         if not files:
             raise FileNotFoundError(f"No .h5 files found in {d}")
-        
-        beta_0 = util.load_firstfile(os.path.join(d, ""), "metadata/beta")
+
+        files = completed_bin_files(files, d)
+        beta_0 = util.load_file(files[0], "metadata/beta")
         beta_0 = float(np.asarray(beta_0[0], dtype=float).reshape(-1)[0])
         T = 1/beta_0
         T_list.append(T)
@@ -175,7 +204,8 @@ def fluc(subdirs, tp):
         if not files:
             raise FileNotFoundError(f"No .h5 files found in {d}")
 
-        beta_0 = util.load_firstfile(os.path.join(d, ""), "metadata/beta")
+        files = completed_bin_files(files, d)
+        beta_0 = util.load_file(files[0], "metadata/beta")
         beta_0 = float(np.asarray(beta_0[0], dtype=float).reshape(-1)[0])
         T_list.append(1 / beta_0)
         #print("current T = ", 1/beta_0)

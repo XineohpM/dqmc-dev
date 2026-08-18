@@ -242,3 +242,4 @@ slurm_logs/
 
 # Docs
 scripts/*.md
+test/test_compute_specific_heat.py
