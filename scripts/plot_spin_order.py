@@ -169,6 +169,11 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
     np.save(os.path.join(run_path, f"{out_prefix}_S_zz_qspace_mean.npy"), S_q_mean)
     np.save(os.path.join(run_path, f"{out_prefix}_S_zz_qspace_err.npy"), S_q_err)
 
+    S_zz_00 = float(S_q_mean[0, 0])
+    S_zz_00_err = float(S_q_err[0, 0])
+    chi_mean = beta * S_zz_00
+    chi_err = beta * S_zz_00_err
+
     # Check if S_q peaks at (pi,pi)
     iy_pi = Ny // 2
     ix_pi = Nx // 2
@@ -276,6 +281,8 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
         "beta": beta,
         "S_zz": S_zz,
         "S_zz_err": S_zz_err,
+        "chi_mean": chi_mean,
+        "chi_err": chi_err,
     }
 
 def main():
@@ -305,15 +312,21 @@ def main():
     T_arr = np.asarray([rows[i]["T"] for i in order], dtype=float)
     S_arr = np.asarray([rows[i]["S_zz"] for i in order], dtype=float)
     S_err_arr = np.asarray([rows[i]["S_zz_err"] for i in order], dtype=float)
+    chi_mean_arr = np.asarray([rows[i]["chi_mean"] for i in order], dtype=float)
+    chi_err_arr = np.asarray([rows[i]["chi_err"] for i in order], dtype=float)
 
     np.save(os.path.join(base_path, f"{args.out_prefix}_S_zz_T.npy"), T_arr)
     np.save(os.path.join(base_path, f"{args.out_prefix}_S_zz_mean.npy"), S_arr)
     np.save(os.path.join(base_path, f"{args.out_prefix}_S_zz_err.npy"), S_err_arr)
+    np.save(os.path.join(base_path, f"{args.out_prefix}_chi_mean.npy"), chi_mean_arr)
+    np.save(os.path.join(base_path, f"{args.out_prefix}_chi_err.npy"), chi_err_arr)
 
     print("Saved S_zz vs T arrays:")
     print(f"  {os.path.join(base_path, args.out_prefix + '_S_zz_T.npy')}")
     print(f"  {os.path.join(base_path, args.out_prefix + '_S_zz_mean.npy')}")
     print(f"  {os.path.join(base_path, args.out_prefix + '_S_zz_err.npy')}")
+    print(f"  {os.path.join(base_path, args.out_prefix + '_chi_mean.npy')}")
+    print(f"  {os.path.join(base_path, args.out_prefix + '_chi_err.npy')}")
 
 if __name__ == "__main__":
     main()
