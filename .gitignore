@@ -238,6 +238,8 @@ cython_debug/
 .DS_Store
 
 # Temporary tests and logs
+scripts/High_T_expansion.ipynb
+test/attractive_Hubbard_tests.md
 slurm_logs/
 
 # Docs

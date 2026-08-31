@@ -519,6 +519,7 @@ def main():
             root, _ = os.path.splitext(args.out)
             np.save(f"{root}_T.npy", Ts_me)
             np.save(f"{root}_rho_maxent.npy", rho_me)
+            np.save(f"{root}_rho_maxent_err.npy", yerr_me[0])
             print("Wrote", f"{root}_T.npy")
             print("Wrote", f"{root}_rho_maxent.npy")
 
