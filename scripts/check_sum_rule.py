@@ -260,6 +260,14 @@ def main():
         )
         return 1.0 / float(bundle.metadata["beta"])
 
+    T_arr = []
+    kinetic_arr = []
+    kinetic_err_arr = []
+    norm_arr = []
+    norm_err_arr = []
+    stiff_arr = []
+    stiff_err_arr = []
+    rel_diff_arr = []
     for run_index, relpath in enumerate(
         sorted(args.relpath_list, key=temperature)
     ):
@@ -300,7 +308,8 @@ def main():
             _as_real(kinetic, "kinetic energy", args.imag_tol)
         )
         target = -kinetic
-        relative_difference = (norm4 - target) / target
+        stiff = (target - norm4)/ 2
+        relative_difference = (target - norm4) / target
 
         aligned = (
             bundle.source_files is not None
@@ -349,20 +358,23 @@ def main():
             args.imag_tol,
         ).item()
 
+        T_arr.append(1.0/beta)
+        kinetic_arr.append(kinetic)
+        kinetic_err_arr.append(target_error)
+        norm_arr.append(norm4)
+        norm_err_arr.append(norm_error)
+        stiff_arr.append(stiff)
+        stiff_err_arr.append(difference_error/2.0)
+        rel_diff_arr.append(relative_difference)
+
         print("T = ", 1.0 / beta)
-        print("dt = ", dt, "(paired bundle)")
-        print("corr shape = ", bundle.numerator.shape)
-        print("kinetic bins = ", kinetic_sign.size)
-        print("bootstrap alignment = ", alignment)
-        print("unequal-time mean sign = ", uneqlt_mean_sign)
-        print("equal-time mean sign = ", eqlt_mean_sign)
         print("norm of correlator = ", norm4)
-        print("norm bootstrap stderr = ", norm_error)
+        print("norm stderr = ", norm_error)
         print("kinetic energy target = ", target)
         print("kinetic target bootstrap stderr = ", target_error)
         print("relative difference = ", relative_difference)
-        print("difference bootstrap stderr = ", difference_error)
-        print("difference / bootstrap error = ", z_score)
+        print("difference stderr = ", difference_error)
+        print("absolute difference / difference stderr = ", z_score)
         if np.isclose(norm4, target, rtol=args.rtol, atol=0):
             print("norm of correlator = kinetic energy")
         else:
@@ -370,6 +382,15 @@ def main():
         print("k/norm = ", target / norm4)
         print(" ")
 
+    data = np.column_stack((T_arr, kinetic_arr, kinetic_err_arr, norm_arr, norm_err_arr,
+                            stiff_arr, stiff_err_arr, rel_diff_arr))
+    np.savetxt(
+        "check_sum_rule.tsv",
+        data,
+        delimiter="\t",
+        header="T\t K \t K_err \t 4Lambda \t 4Lambda_err \t D \t D_err \t rel_diff",
+        comments=""
+    )
 
 if __name__ == "__main__":
     main()
