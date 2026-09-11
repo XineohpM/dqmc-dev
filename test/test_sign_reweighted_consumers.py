@@ -18,6 +18,24 @@ import plot_compressibility_from_n_mu
 import resistivity_proxy
 
 
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/runs/n0.6/T_0.1", 0.6),
+        ("/runs/n0.6_resistivity/T_0.1", 0.6),
+        ("/runs/half_filling/T_0.1", 1.0),
+        ("/runs/scan_half_filling_data/T_0.1", 1.0),
+    ],
+)
+def test_sum_rule_infers_filling_from_path(path, expected):
+    assert check_sum_rule.infer_filling_from_path(path) == expected
+
+
+def test_sum_rule_does_not_parse_nflux_as_filling():
+    with pytest.raises(ValueError, match="Cannot infer filling"):
+        check_sum_rule.infer_filling_from_path("/runs/tp0_nflux0/T_0.1")
+
+
 def _save_bundle(
     path,
     numerator,
@@ -212,7 +230,7 @@ def test_sum_rule_uses_synchronized_source_file_bootstrap(
     monkeypatch,
     capsys,
 ):
-    run = tmp_path / "run"
+    run = tmp_path / "n0.6"
     run.mkdir()
     sign = np.array([2.0, 1.0, 3.0, 2.0])
     curve = np.array([5.0, 4.0, 3.5, 3.0, 3.5, 4.0])
@@ -268,7 +286,7 @@ def test_sum_rule_uses_synchronized_source_file_bootstrap(
             "--path",
             str(tmp_path),
             "--relpath_list",
-            "run",
+            "n0.6",
             "--bootstrap",
             "20",
             "--seed",
@@ -276,6 +294,7 @@ def test_sum_rule_uses_synchronized_source_file_bootstrap(
         ],
     )
 
+    monkeypatch.chdir(tmp_path)
     check_sum_rule.main()
 
     output = capsys.readouterr().out
@@ -283,6 +302,10 @@ def test_sum_rule_uses_synchronized_source_file_bootstrap(
     assert "norm of correlator = kinetic energy" in output
     assert "unequal-time mean sign" in output
     assert "equal-time mean sign" in output
+
+    result = np.loadtxt(tmp_path / "check_sum_rule.tsv", skiprows=1)
+    assert result.shape == (9,)
+    assert result[0] == pytest.approx(0.6)
 
 
 def test_local_moment_center_is_ratio_of_sums_with_fluctuating_sign():

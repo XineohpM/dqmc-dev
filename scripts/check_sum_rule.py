@@ -4,12 +4,35 @@
 import argparse
 import glob
 import os
+import re
 
 import h5py
 import numpy as np
 from scipy.interpolate import InterpolatedUnivariateSpline
 
 import paired_bootstrap
+
+
+_FILLING_RE = re.compile(r"^n([0-9]+(?:\.[0-9]+)?)(?:_|$)")
+
+
+def infer_filling_from_path(path):
+    """Infer the target filling from a run path."""
+
+    path = os.path.normpath(os.fspath(path))
+    if "half_filling" in path:
+        return 1.0
+
+    fillings = []
+    for component in path.split(os.sep):
+        match = _FILLING_RE.match(component)
+        if match:
+            fillings.append(float(match.group(1)))
+    if not fillings:
+        raise ValueError(f"Cannot infer filling n from path: {path}")
+    if len(set(fillings)) != 1:
+        raise ValueError(f"Conflicting filling values in path: {path}")
+    return fillings[0]
 
 
 def _scalar(value, name, path):
@@ -260,6 +283,7 @@ def main():
         )
         return 1.0 / float(bundle.metadata["beta"])
 
+    n_arr = []
     T_arr = []
     kinetic_arr = []
     kinetic_err_arr = []
@@ -272,6 +296,7 @@ def main():
         sorted(args.relpath_list, key=temperature)
     ):
         directory = os.path.join(base, relpath)
+        filling = infer_filling_from_path(directory)
         bundle_path = os.path.join(directory, args.correlator_name)
         bundle = paired_bootstrap.load_paired_bundle(bundle_path)
         if (
@@ -358,6 +383,7 @@ def main():
             args.imag_tol,
         ).item()
 
+        n_arr.append(filling)
         T_arr.append(1.0/beta)
         kinetic_arr.append(kinetic)
         kinetic_err_arr.append(target_error)
@@ -368,6 +394,10 @@ def main():
         rel_diff_arr.append(relative_difference)
 
         print("T = ", 1.0 / beta)
+        print("n = ", filling)
+        print("bootstrap alignment = ", alignment)
+        print("unequal-time mean sign = ", uneqlt_mean_sign)
+        print("equal-time mean sign = ", eqlt_mean_sign)
         print("norm of correlator = ", norm4)
         print("norm stderr = ", norm_error)
         print("kinetic energy target = ", target)
@@ -382,13 +412,15 @@ def main():
         print("k/norm = ", target / norm4)
         print(" ")
 
-    data = np.column_stack((T_arr, kinetic_arr, kinetic_err_arr, norm_arr, norm_err_arr,
-                            stiff_arr, stiff_err_arr, rel_diff_arr))
+    data = np.column_stack((n_arr, T_arr, kinetic_arr, kinetic_err_arr,
+                            norm_arr, norm_err_arr, stiff_arr, stiff_err_arr,
+                            rel_diff_arr))
+    data = data[np.lexsort((data[:, 1], data[:, 0]))]
     np.savetxt(
         "check_sum_rule.tsv",
         data,
         delimiter="\t",
-        header="T\t K \t K_err \t 4Lambda \t 4Lambda_err \t D \t D_err \t rel_diff",
+        header="n\tT\tK\tK_err\t4Lambda\t4Lambda_err\tD\tD_err\trel_diff",
         comments=""
     )
 
