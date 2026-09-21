@@ -1,5 +1,5 @@
 """
-run_maxent_anneal.py: A lightweight CLI wrapper for temperature-annealed MaxEnt, so you can pass a sequence of runs/data from the shell and use the previous temperature's spectrum as the next temperature's default model.
+run_maxent_anneal.py: Temperature-annealed MaxEnt using sign-aware paired correlator bundles and the previous temperature's spectrum as the next default model.
 
 Usage examples:
 
@@ -7,8 +7,9 @@ Usage examples:
     python run_maxent_anneal.py \
         --base /path/to/dqmc_runs \
         --items T_0.5,0.5 T_0.4,0.4 T_0.333333,0.333333 \
-        --data_file jj_xx.npy \
+        --data_file JNJN_xx_paired.npz \
         --omega_max 12.0 --n_omega 200 \
+        --cov_bs 1000 --bootstrap_block_size 1 \
         --bs 50 --rnd_seed 12345 \
         --op_type boson --sym \
         --grid linear \
@@ -18,8 +19,9 @@ Usage examples:
     python run_maxent_anneal.py \
         --base /path/to/dqmc_runs \
         --items T_0.5,0.5 T_0.4,0.4 T_0.333333,0.333333 \
-        --data_file jj_xx.npy \
+        --data_file JNJN_xx_paired.npz \
         --omega_max 12.0 --n_omega 200 \
+        --cov_bs 1000 --bootstrap_block_size 1 \
         --bs 50 --rnd_seed 12345 \
         --op_type boson --sym \
         --grid sinh --a 0.4 --b 2.5 \
@@ -52,8 +54,9 @@ Usage examples:
                         T_0.25,0.25 \
                         T_0.222222,0.222222 \
                         T_0.2,0.2 \
-                    --data_file JNJN_xx_perbin.npy \
+                    --data_file JNJN_xx_paired.npz \
                     --omega_max 12.0 --n_omega 100 \
+                    --cov_bs 1000 --bootstrap_block_size 1 \
                     --bs 200 --rnd_seed 12345 \
                     --op_type boson --sym \
                     --grid linear \
@@ -66,34 +69,38 @@ Outputs:
     <prefix>s_all.npy    # all bootstrap spectra, shape (bs, N_ω)
     <prefix>omega.npy    # frequency grid points, shape (N_ω,)
     <prefix>domega.npy   # frequency bin widths, shape (N_ω,)
-    <prefix>metadata.npy # dict with dt, beta, L, nbin (load with allow_pickle=True)
+    <prefix>metadata.npy # source_nbin, maxent_nrow, bootstrap settings, beta/dt/L
 """
-import os, argparse, sys, glob
+import os, argparse, sys
 import numpy as np
-import matplotlib.pyplot as plt
-import maxent
 import run_maxent_phoenix
-from pathlib import Path
-
-utilpath = Path(__file__).resolve().parents[1]/"util"
-sys.path.insert(0, str(utilpath))
-
-import util
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--base", required=True,
                     help="Base directory that contains the temperature subdirectories listed in --items.")
     p.add_argument("--items", nargs="+", required=True,
-                    help=("List of items: each is 'relpath,T'. Example:'T_0.2,0.2'"))
+                    help=("List of items. Each item is either 'relpath,T' or "
+                        "'relpath,T,alpha_min,alpha_max' or "
+                        "'relpath,T,alpha_min,alpha_max,alpha_pts'."))
     p.add_argument("--data_file", type = str, required=True,
-                    help="Filname of the imaginary time correlator, (N_bin, L)")
+                    help="Filename of the self-contained *_paired.npz correlator bundle in each temperature directory.")
     p.add_argument("--omega_max", type=float, required=True,
                 help="Maximum frequency.")
     p.add_argument("--n_omega", type=int, required=True,
                 help="Number of points on the frequency axis.")
     p.add_argument("--bs", type=int, required=True,
-                help="Number of bootstrap samples to perform.")
+                help="Number of outer MaxEnt spectrum bootstrap samples.")
+    p.add_argument(
+                "--cov_bs",
+                type=int,
+                default=None,
+                help="Number of paired-bootstrap estimates used to construct MaxEnt covariance rows (default: --bs).")
+    p.add_argument(
+                "--bootstrap_block_size",
+                type=int,
+                default=1,
+                help="Circular paired-bootstrap block size in source bins (default: 1).")
     p.add_argument("--op_type", choices=["boson", "fermion"], default="boson",
                 help="Kernel/operator type, choose between \"boson\" and \"fermion\".")
     g = p.add_mutually_exclusive_group()
@@ -103,9 +110,13 @@ def main():
                 help="Disable symmetric bosonic kernel.")
     p.set_defaults(sym=False)
     p.add_argument("--append", type=str,
-                help="Path to tau=beta column for nonsymmetric bosonic kernel, (N_bin, 1)")
-    p.add_argument("--highT_model", type=str,
+                help="Filename/path of the aligned one-column paired bundle for tau=beta in each nonsymmetric bosonic run.")
+    model_g = p.add_mutually_exclusive_group()
+    model_g.add_argument("--highT_model", type=str,
                 help="Comma-separated spectral func array for annealing the highest T.")
+    model_g.add_argument("--lowT_gap", type=float,
+                help="If set, use gapped model for the lowest T and do inverse annealing." \
+                "Input the width of the gap.")
     p.add_argument("--method", choices=["classic", "bryan", "BT"], default="BT",
                 help="Alpha selection method, defualt BT.")
     p.add_argument("--output_relpath", type=str,
@@ -120,6 +131,8 @@ def main():
                 help="Coefficient b in omega = a*sinh(b*x).")
     p.add_argument("--checks", action="store_true",
                 help="Plot bootstrap reconstructions and diagnostics.")
+    p.add_argument("--printout", action="store_true",
+                help="Print bootstrap diagnostics.")
     p.add_argument("--rnd_seed", type=int,
                 help="Seed for bootstrap resampling RNG.")
     
@@ -130,30 +143,78 @@ def main():
 
     T_arr = []
     dpath_arr = []
-    dt_arr = []
+    #dt_arr = []
+    alpha_min_arr = []
+    alpha_max_arr = []
+    alpha_pts_arr = []
 
     for item in args.items:
-        rel, Tstr = item.split(",")
+        parts = item.split(",")
+        if len(parts) == 2:
+            rel, Tstr = parts
+            alpha_min = 1
+            alpha_max = 9
+            alpha_pts = 161
+        elif len(parts) == 4:
+            rel, Tstr, amin_str, amax_str = parts
+            alpha_min = float(amin_str)
+            alpha_max = float(amax_str)
+            alpha_pts = 161
+        elif len(parts) == 5:
+            rel, Tstr, amin_str, amax_str, apts_str = parts
+            alpha_min = float(amin_str)
+            alpha_max = float(amax_str)
+            alpha_pts = int(apts_str)
+        else:
+            raise ValueError(
+                "Each --items entry must be 'relpath,T' or " \
+                "'relpath,T,alpha_min,alpha_max' or " \
+                "'relpath,T,alpha_min,alpha_max,alpha_pts'."
+            )
+
         T = float(Tstr)
-        #dt = float(dtstr)
         dpath = os.path.join(args.base, rel)
-
-        files = sorted(glob.glob(os.path.join(dpath, "*.h5")))
-        if not files:
-            raise FileNotFoundError(f"No .h5 files found in {dpath}")
-
-        beta_raw = util.load_file(files[0], "metadata/beta")
-        beta = float(np.asarray(beta_raw[0]).reshape(-1)[0])
-        if np.abs(T - 1/beta) >= 5e-5:
-            raise ValueError(f"Input T {T} does not match T {1/beta} read from hdf5.")
+        if not os.path.isdir(dpath):
+            raise FileNotFoundError(
+                f"Temperature directory not found: {dpath}"
+            )
+        bundle_path = os.path.join(dpath, args.data_file)
+        if not os.path.isfile(bundle_path):
+            raise FileNotFoundError(
+                f"Paired correlator bundle not found: {bundle_path}"
+            )
         
         T_arr.append(T)
         dpath_arr.append(dpath)
+        alpha_min_arr.append(alpha_min)
+        alpha_max_arr.append(alpha_max)
+        alpha_pts_arr.append(alpha_pts)
         #dt_arr.append(dt)
-        idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=True)
-        T_arr    = [T_arr[i] for i in idx]
-        dpath_arr = [dpath_arr[i] for i in idx]
-        #dt_arr   = [dt_arr[i] for i in idx]
+        if args.highT_model is not None:
+            idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=True)
+            T_arr    = [T_arr[i] for i in idx]
+            dpath_arr = [dpath_arr[i] for i in idx]
+            alpha_min_arr = [alpha_min_arr[i] for i in idx]
+            alpha_max_arr = [alpha_max_arr[i] for i in idx]
+            alpha_pts_arr = [alpha_pts_arr[i] for i in idx]
+            #dt_arr   = [dt_arr[i] for i in idx]
+        elif args.lowT_gap is not None:
+            idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=False)
+            T_arr    = [T_arr[i] for i in idx]
+            dpath_arr = [dpath_arr[i] for i in idx]
+            alpha_min_arr = [alpha_min_arr[i] for i in idx]
+            alpha_max_arr = [alpha_max_arr[i] for i in idx]
+            alpha_pts_arr = [alpha_pts_arr[i] for i in idx]
+            #dt_arr   = [dt_arr[i] for i in idx]
+        else:
+            print("Model not given. Using flat model for annealing from high T to low T.")
+            idx = sorted(range(len(T_arr)), key=lambda i: T_arr[i], reverse=True)
+            T_arr    = [T_arr[i] for i in idx]
+            dpath_arr = [dpath_arr[i] for i in idx]
+            alpha_min_arr = [alpha_min_arr[i] for i in idx]
+            alpha_max_arr = [alpha_max_arr[i] for i in idx]
+            alpha_pts_arr = [alpha_pts_arr[i] for i in idx]
+            #dt_arr   = [dt_arr[i] for i in idx]
 
     op_type = args.op_type
     sym = args.sym
@@ -168,47 +229,102 @@ def main():
         omega, domega = run_maxent_phoenix.build_grid(op_type, sym, int(args.n_omega), float(args.omega_max), grid, float(args.a), float(args.b))
     else: raise ValueError(f"Unknown grid type: {grid}, grid type should be either \"linear\" or \"sinh\"")
 
-    append = args.append
     mkwargs = {"method": args.method}
     if args.rnd_seed is not None:
+        # maxent.Preprocess currently uses NumPy's legacy global RNG for
+        # the fermionic tau=beta endpoint.
         np.random.seed(int(args.rnd_seed))
+    seed_sequence = np.random.SeedSequence(args.rnd_seed)
+    item_seeds = seed_sequence.spawn(2 * len(T_arr))
+    cov_bs = int(args.bs) if args.cov_bs is None else int(args.cov_bs)
     
     prev_A = None
     for i in range(len(T_arr)):
         T = T_arr[i]
         #dt = dt_arr[i]
         dpath = dpath_arr[i]
+        if alpha_pts_arr[i] < 2:
+            raise ValueError("alpha_pts must be at least 2.")
+        if alpha_max_arr[i] <= alpha_min_arr[i]:
+            raise ValueError("alpha_max must be greater than alpha_min.")
+        alpha_arr = np.logspace(alpha_min_arr[i], alpha_max_arr[i], alpha_pts_arr[i])
         if i == 0:
-            if args.highT_model is None:
-                model = None
-            else:
+            if args.highT_model is not None:
                 model = np.array([float(x) for x in args.highT_model.split(",") if x.strip()], dtype=float)
                 if model.shape != omega.shape:
                     raise ValueError(
                         f"--highT_model length {model.shape[0]} does not match omega grid length {omega.shape[0]}."
                     )
+            elif args.lowT_gap is not None:
+                gap = float(args.lowT_gap)
+                power = 3.0
+                m_cont = 1.0 - np.exp(-(omega/gap)**power)
+                model = m_cont * domega
+                model /= model.sum()
+            else:
+                model = None
         else:
             if prev_A is None:
                 raise RuntimeError("Previous temperature MaxEnt output A is missing; cannot anneal to the next temperature.")
             model = prev_A
 
-        corr = np.load(os.path.join(dpath, args.data_file), allow_pickle=False)
-        if corr.ndim != 2: raise ValueError(f"Correlator must be 2D (N_bin, L) matrix. Got shape {corr.shape}.")
-        nbin, L = corr.shape
-        beta = 1/T
-        dt = beta/L
-        metadata = {"dt": dt, "beta": beta, "L": L, "nbin": int(nbin)}
+        covariance_rng = np.random.default_rng(item_seeds[2 * i])
+        spectrum_rng = np.random.default_rng(item_seeds[2 * i + 1])
+        append_path = None
+        if (op_type == "boson") and (not sym):
+            if not args.append:
+                raise ValueError(
+                    "--append paired bundle is required for the "
+                    "nonsymmetric bosonic case."
+                )
+            append_path = (
+                args.append
+                if os.path.isabs(args.append)
+                else os.path.join(dpath, args.append)
+            )
+        elif args.append:
+            raise ValueError(
+                "--append is only valid for a nonsymmetric bosonic kernel"
+            )
+
+        prepared = run_maxent_phoenix.prepare_paired_maxent_input(
+            os.path.join(dpath, args.data_file),
+            cov_bs,
+            rng=covariance_rng,
+            bootstrap_block_size=int(args.bootstrap_block_size),
+            append_bundle_path=append_path,
+        )
+        corr = prepared["chi"]
+        append = prepared["append"]
+        metadata = prepared["metadata"]
+        beta = float(metadata["beta"])
+        if np.abs(T - 1 / beta) >= 5e-5:
+            raise ValueError(
+                f"Input T {T} does not match T {1 / beta} "
+                f"from paired bundle metadata."
+            )
+        metadata.update(
+            {
+                "bootstrap_seed": args.rnd_seed,
+                "anneal_index": int(i),
+                "temperature": float(T),
+                "spectrum_bootstrap_samples": int(args.bs),
+            }
+        )
 
         results = run_maxent_phoenix.perform_maxent(
             chi=corr,
             omega_grid=(omega, domega),
             metadata=metadata,
             append=append,
+            alpha_arr=alpha_arr,
             bs=int(args.bs),
             anneal_arr=model,
             checks=args.checks,
+            printout=args.printout,
             op_type=op_type,
             sym=sym,
+            rng=spectrum_rng,
             **mkwargs
         )
         prev_A = np.array(results["A"], copy=True)
@@ -233,5 +349,3 @@ def main():
 
 if __name__ == "__main__": main()
         
-
-

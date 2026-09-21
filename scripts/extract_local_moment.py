@@ -1,242 +1,600 @@
 #!/usr/bin/env python3
-"""
-extract_local_moment.py
-phoenixm@stanford.edu
+"""Extract the sign-reweighted local moment from equal-time DQMC bins.
 
-Extract local moment <m_z^2>(T) from DQMC HDF5 outputs.
+For each completed bin b, the HDF5 datasets are raw signed accumulators:
 
-Definition (single-orbital):
-    m_z = n_up - n_dn
-    <m_z^2> = <n> - 2 <n_up n_dn>
+    A_n,b = sum_i sign_i * n_i
+    A_D,b = sum_i sign_i * (n_up n_down)_i
+    S_b   = sum_i sign_i
 
-This script scans ROOT/T_*/ for *.h5, reads meas_eqlt results, computes per-file <m_z^2>,
-then averages over files at each temperature and plots vs T.
-
-It is tailored to the dqmc-dev HDF5 layout where the following datasets exist:
-    /meas_eqlt/n_sample   (scalar)
-    /meas_eqlt/double_occ (shape {1} accumulator over samples)
-    /meas_eqlt/density    (shape {1} accumulator over samples)
-Optionally, /meas_eqlt/density_u and /meas_eqlt/density_d may exist.
-
-Notes on normalization:
-For scalar datasets stored as shape {1}, the value is typically accumulated over n_sample;
-we divide by n_sample to get the sample average.
-
-Usage example:
-python3 /home/users/phoenixm/scripts/extract_local_moment.py \
-  --root /scratch/users/phoenixm/dqmc_runs/U-6_n6x6_C \
-  --out_prefix U-6_n6x6_C_local_moment \
-  --U -6
+The local-moment numerator is A_m2,b = A_n,b - 2 A_D,b and the physical
+estimate is sum_b(A_m2,b) / sum_b(S_b).  Mean and uncertainty are evaluated
+with util.jackknife_noniid using n_sample as the bin-size argument.
 """
 
-import os
-import glob
+from __future__ import annotations
+
 import argparse
+import glob
+import os
+import sys
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 import h5py
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+
+utilpath = Path(__file__).resolve().parents[1] / "util"
+sys.path.insert(0, str(utilpath))
+
+import util
+
 
 PATH_NS = "meas_eqlt/n_sample"
-PATH_DO = "meas_eqlt/double_occ"      # <n_u n_d> accumulator
-PATH_N  = "meas_eqlt/density"         # <n_u + n_d> accumulator
+PATH_SIGN = "meas_eqlt/sign"
+PATH_DO = "meas_eqlt/double_occ"
+PATH_N = "meas_eqlt/density"
 PATH_NU = "meas_eqlt/density_u"
 PATH_ND = "meas_eqlt/density_d"
-PATH_SIGN = "meas_eqlt/sign"          # optional; may be absent in some builds
+PATH_BETA = "metadata/beta"
+PATH_U = "metadata/U"
+DENOMINATOR_RTOL = 1e-12
 
 
-def _read_scalar_avg(f: h5py.File, path: str, n_sample: int) -> float:
-    """Read dataset at `path` and return sample average as float.
+def _scalar(value: Any, name: str, filename: str) -> Any:
+    array = np.asarray(value)
+    if array.size != 1:
+        raise ValueError(
+            f"{filename}:{name} must be scalar, got shape {array.shape}"
+        )
+    result = array.reshape(-1)[0]
+    if not np.isfinite(result):
+        raise ValueError(f"{filename}:{name} is non-finite")
+    return result.item()
 
-    Supports scalar datasets stored as shape () or (1,) that represent sums over samples.
-    Also supports per-sample arrays (shape (n_sample,)) by taking mean.
-    """
-    x = np.array(f[path][()])
-    if x.shape == () or x.size == 1:
-        return float(x.reshape(-1)[0]) / float(n_sample)
-    return float(np.mean(x))
+
+def _mean_accumulator(
+    value: Any,
+    name: str,
+    filename: str,
+) -> np.number:
+    """Reduce a scalar or site/orbital array to one raw spatial mean."""
+
+    array = np.asarray(value)
+    if array.size == 0:
+        raise ValueError(f"{filename}:{name} is empty")
+    if array.dtype.kind not in "biufc":
+        raise ValueError(
+            f"{filename}:{name} must be numeric, got dtype {array.dtype}"
+        )
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{filename}:{name} contains non-finite values")
+    return np.mean(array)
 
 
-def _per_file_mz2(fp: str, tol_density: float, tol_spin: float, strict: bool) -> tuple[float, bool, bool]:
-    """Compute <m_z^2> for a single HDF5 file.
+def _read_bin(filename: str) -> Dict[str, Any]:
+    with h5py.File(filename, "r") as h5:
+        required = (PATH_NS, PATH_SIGN, PATH_DO, PATH_N, PATH_BETA, PATH_U)
+        missing = [key for key in required if key not in h5]
+        if missing:
+            raise KeyError(
+                f"{filename} is missing required dataset(s): {missing}"
+            )
 
-    Returns:
-        mz2: <m_z^2>
-        dens_mismatch: whether |(density_u+density_d) - density| exceeds tol_density (if both exist)
-        spin_mismatch: whether |density_u - density_d| exceeds tol_spin (if both exist)
-    """
-    with h5py.File(fp, "r") as f:
-        ns = int(np.array(f[PATH_NS]))
+        n_sample = int(_scalar(h5[PATH_NS][...], PATH_NS, filename))
+        if n_sample <= 0:
+            raise ValueError(
+                f"{filename}:{PATH_NS} must be positive, got {n_sample}"
+            )
 
-        # double occupancy D = <n_up n_dn>
-        D = _read_scalar_avg(f, PATH_DO, ns)
+        sign = _scalar(h5[PATH_SIGN][...], PATH_SIGN, filename)
+        density_array = np.asarray(h5[PATH_N][...])
+        double_occ_array = np.asarray(h5[PATH_DO][...])
+        if density_array.size != double_occ_array.size:
+            raise ValueError(
+                f"{filename}: density/double_occ size mismatch: "
+                f"{density_array.size} vs {double_occ_array.size}"
+            )
 
-        # total density n = <n_up + n_dn>
-        dens_mismatch = False
-        spin_mismatch = False
+        density = _mean_accumulator(density_array, PATH_N, filename)
+        double_occ = _mean_accumulator(
+            double_occ_array,
+            PATH_DO,
+            filename,
+        )
 
-        n = None
-        if PATH_N in f:
-            n = _read_scalar_avg(f, PATH_N, ns)
+        has_nu = PATH_NU in h5
+        has_nd = PATH_ND in h5
+        if has_nu != has_nd:
+            raise KeyError(
+                f"{filename} must contain both {PATH_NU} and {PATH_ND}, "
+                "or neither"
+            )
 
-        nu = nd = None
-        if PATH_NU in f and PATH_ND in f:
-            nu = _read_scalar_avg(f, PATH_NU, ns)
-            nd = _read_scalar_avg(f, PATH_ND, ns)
-
-            # Consistency check: density_u + density_d equals density (if density exists)
-            if n is not None:
-                dens_mismatch = abs((nu + nd) - n) > float(tol_density)
-
-            # Spin symmetry check
-            spin_mismatch = abs(nu - nd) > float(tol_spin)
-
-            if strict and (dens_mismatch or spin_mismatch):
+        density_u: Optional[np.number] = None
+        density_d: Optional[np.number] = None
+        if has_nu:
+            density_u_array = np.asarray(h5[PATH_NU][...])
+            density_d_array = np.asarray(h5[PATH_ND][...])
+            if (
+                density_u_array.size != density_array.size
+                or density_d_array.size != density_array.size
+            ):
                 raise ValueError(
-                    f"Check failed for {fp}: n={n}, nu={nu}, nd={nd}, "
-                    f"nu+nd={(nu+nd)}, |nu+nd-n|={abs((nu+nd)-(n if n is not None else 0.0))}, "
-                    f"|nu-nd|={abs(nu-nd)}"
+                    f"{filename}: density_u/density_d sizes must match density"
                 )
+            density_u = _mean_accumulator(
+                density_u_array,
+                PATH_NU,
+                filename,
+            )
+            density_d = _mean_accumulator(
+                density_d_array,
+                PATH_ND,
+                filename,
+            )
 
-        # If no total density was read yet, fall back to nu+nd if present
-        if n is None:
-            if nu is not None and nd is not None:
-                n = nu + nd
-            else:
-                raise KeyError("Missing density dataset: need /meas_eqlt/density (or density_u+density_d)")
+        return {
+            "filename": filename,
+            "n_sample": n_sample,
+            "sign": sign,
+            "density": density,
+            "double_occ": double_occ,
+            "density_u": density_u,
+            "density_d": density_d,
+            "beta": float(_scalar(h5[PATH_BETA][...], PATH_BETA, filename)),
+            "U": float(_scalar(h5[PATH_U][...], PATH_U, filename)),
+        }
 
-        mz2 = n - 2.0 * D
 
-        if not np.isfinite(mz2):
-            raise ValueError("mz2 is not finite")
+def _validate_jackknife_denominators(sign: np.ndarray) -> None:
+    sign = np.asarray(sign)
+    total = np.sum(sign)
+    total_abs = np.sum(np.abs(sign))
+    if np.abs(total) <= DENOMINATOR_RTOL * total_abs:
+        raise ValueError(
+            "total accumulated sign/phase is too close to zero"
+        )
 
-        return float(mz2), dens_mismatch, spin_mismatch
+    leave_one_out = total - sign
+    leave_one_out_abs = total_abs - np.abs(sign)
+    bad = np.abs(leave_one_out) <= (
+        DENOMINATOR_RTOL * leave_one_out_abs
+    )
+    if np.any(bad):
+        indices = np.flatnonzero(bad)[:10].tolist()
+        raise ValueError(
+            "jackknife leave-one-out accumulated sign/phase is too close "
+            f"to zero when omitting bin(s) {indices}"
+        )
+
+
+def _jackknife_stats(
+    n_sample: np.ndarray,
+    sign: np.ndarray,
+    numerator: np.ndarray,
+):
+    _validate_jackknife_denominators(sign)
+    if np.iscomplexobj(sign) or np.iscomplexobj(numerator):
+        jk_real = util.jackknife_noniid(
+            n_sample,
+            sign,
+            numerator,
+            f=lambda ns, s, a: (a / s).real,
+        )
+        jk_imag = util.jackknife_noniid(
+            n_sample,
+            sign,
+            numerator,
+            f=lambda ns, s, a: (a / s).imag,
+        )
+        mean = complex(jk_real[0], jk_imag[0])
+        stderr = float(np.hypot(jk_real[1], jk_imag[1]))
+        return mean, stderr
+
+    mean, stderr = util.jackknife_noniid(
+        n_sample,
+        sign,
+        numerator,
+    )
+    return float(mean), float(stderr)
+
+
+def _check_metadata(
+    records,
+    temperature: float,
+    expected_U: float,
+) -> None:
+    beta0 = records[0]["beta"]
+    U0 = records[0]["U"]
+    for record in records[1:]:
+        if not np.isclose(
+            record["beta"],
+            beta0,
+            rtol=1e-12,
+            atol=1e-12,
+        ):
+            raise ValueError(
+                f"inconsistent beta in {record['filename']}: "
+                f"{record['beta']} != {beta0}"
+            )
+        if not np.isclose(
+            record["U"],
+            U0,
+            rtol=1e-12,
+            atol=1e-12,
+        ):
+            raise ValueError(
+                f"inconsistent U in {record['filename']}: "
+                f"{record['U']} != {U0}"
+            )
+
+    if not np.isclose(
+        beta0 * temperature,
+        1.0,
+        rtol=1e-5,
+        atol=1e-10,
+    ):
+        raise ValueError(
+            f"temperature/beta mismatch: T={temperature:g}, beta={beta0:g}"
+        )
+    if not np.isclose(U0, expected_U, rtol=1e-12, atol=1e-12):
+        raise ValueError(
+            f"command-line U={expected_U:g} does not match HDF5 U={U0:g}"
+        )
+
+
+def analyze_temperature_dir(
+    directory: str,
+    temperature: float,
+    expected_U: float,
+    h5_glob: str,
+    tol_density: float,
+    tol_spin: float,
+    strict_checks: bool,
+) -> Dict[str, Any]:
+    filenames = sorted(glob.glob(os.path.join(directory, h5_glob)))
+    if not filenames:
+        raise FileNotFoundError(
+            f"No h5 files matching {h5_glob!r} under {directory}"
+        )
+
+    records = []
+    failed = 0
+    for filename in filenames:
+        try:
+            records.append(_read_bin(filename))
+        except Exception as exc:
+            failed += 1
+            print(f"[WARN] failed to read {filename}: {exc}", file=sys.stderr)
+
+    if not records:
+        raise RuntimeError(
+            f"{directory}: all HDF5 files failed validation "
+            f"(failed={failed})"
+        )
+
+    _check_metadata(records, temperature, expected_U)
+
+    n_sample_all = np.asarray(
+        [record["n_sample"] for record in records],
+        dtype=float,
+    )
+    completed = n_sample_all == np.max(n_sample_all)
+    records = [
+        record for record, keep in zip(records, completed) if keep
+    ]
+    if len(records) < 2:
+        raise ValueError(
+            f"{directory}: need at least two completed bins, got "
+            f"{len(records)}"
+        )
+
+    n_sample = n_sample_all[completed]
+    sign = np.asarray([record["sign"] for record in records])
+    density = np.asarray([record["density"] for record in records])
+    double_occ = np.asarray(
+        [record["double_occ"] for record in records]
+    )
+    mz2_numerator = density - 2.0 * double_occ
+
+    mz2_mean, mz2_stderr = _jackknife_stats(
+        n_sample,
+        sign,
+        mz2_numerator,
+    )
+    density_mean, _ = _jackknife_stats(n_sample, sign, density)
+    double_occ_mean, _ = _jackknife_stats(
+        n_sample,
+        sign,
+        double_occ,
+    )
+    avg_sign = np.sum(sign) / np.sum(n_sample)
+
+    spin_schema = [
+        record["density_u"] is not None and record["density_d"] is not None
+        for record in records
+    ]
+    density_mismatch = False
+    spin_mismatch = False
+    density_delta = np.nan
+    spin_delta = np.nan
+    if all(spin_schema):
+        density_u = np.asarray(
+            [record["density_u"] for record in records]
+        )
+        density_d = np.asarray(
+            [record["density_d"] for record in records]
+        )
+        density_u_mean, _ = _jackknife_stats(
+            n_sample,
+            sign,
+            density_u,
+        )
+        density_d_mean, _ = _jackknife_stats(
+            n_sample,
+            sign,
+            density_d,
+        )
+        density_delta = density_u_mean + density_d_mean - density_mean
+        spin_delta = density_u_mean - density_d_mean
+        density_mismatch = np.abs(density_delta) > float(tol_density)
+        spin_mismatch = np.abs(spin_delta) > float(tol_spin)
+        if strict_checks and (density_mismatch or spin_mismatch):
+            raise ValueError(
+                f"{directory}: sign-reweighted density checks failed: "
+                f"|nu+nd-n|={np.abs(density_delta):g}, "
+                f"|nu-nd|={np.abs(spin_delta):g}"
+            )
+    elif any(spin_schema):
+        print(
+            f"[WARN] {directory}: density_u/density_d are not available "
+            "for every completed bin; skipping spin-density checks",
+            file=sys.stderr,
+        )
+
+    return {
+        "temperature": float(temperature),
+        "mz2_mean": mz2_mean,
+        "mz2_stderr": float(mz2_stderr),
+        "density_mean": density_mean,
+        "double_occ_mean": double_occ_mean,
+        "avg_sign": avg_sign,
+        "nbin": len(records),
+        "n_incomplete": int(np.count_nonzero(~completed)),
+        "n_failed": int(failed),
+        "density_mismatch": bool(density_mismatch),
+        "spin_mismatch": bool(spin_mismatch),
+        "density_delta": density_delta,
+        "spin_delta": spin_delta,
+    }
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Extract <m_z^2>(T) from DQMC HDF5 files.")
-    p.add_argument("--root", required=True, help="Root directory containing T_* subfolders.")
-    p.add_argument("--U", type=float, required=True, help="On-site interaction U used for the atomic-limit reference curve.")
-    p.add_argument("--h5_glob", default="*.h5", help="Glob for h5 files inside each T_* folder.")
-    p.add_argument("--out_prefix", default="local_moment", help="Prefix for output .npy/.png files.")
-    p.add_argument("--skip_missing", action="store_true",
-                   help="Skip T_* folders that have zero readable h5 files instead of erroring.")
-    p.add_argument("--tol_density", type=float, default=1e-6,
-                   help="Abs tolerance for checking density_u+density_d == density (default: 1e-6).")
-    p.add_argument("--tol_spin", type=float, default=1e-6,
-                   help="Abs tolerance for checking spin symmetry |density_u-density_d| (default: 1e-6).")
-    p.add_argument("--strict_checks", action="store_true",
-                   help="If set, raise an error on the first density/spin check violation.")
-    return p.parse_args()
+    parser = argparse.ArgumentParser(
+        description="Extract sign-reweighted <m_z^2>(T) from DQMC HDF5 bins."
+    )
+    parser.add_argument(
+        "--root",
+        required=True,
+        help="Root directory containing T_* subfolders.",
+    )
+    parser.add_argument(
+        "--U",
+        type=float,
+        required=True,
+        help=(
+            "On-site interaction U. It is checked against HDF5 metadata and "
+            "used for the atomic-limit reference curve."
+        ),
+    )
+    parser.add_argument(
+        "--h5_glob",
+        default="*.h5",
+        help="Glob for HDF5 files inside each T_* folder.",
+    )
+    parser.add_argument(
+        "--out_prefix",
+        default="local_moment",
+        help="Prefix for output .npy/.png files.",
+    )
+    parser.add_argument(
+        "--skip_missing",
+        action="store_true",
+        help="Skip T_* folders with no usable HDF5 bins instead of failing.",
+    )
+    parser.add_argument(
+        "--tol_density",
+        type=float,
+        default=1e-6,
+        help=(
+            "Tolerance for the sign-reweighted "
+            "|<n_up>+<n_down>-<n>| check."
+        ),
+    )
+    parser.add_argument(
+        "--tol_spin",
+        type=float,
+        default=1e-6,
+        help="Tolerance for the sign-reweighted |<n_up>-<n_down>| check.",
+    )
+    parser.add_argument(
+        "--strict_checks",
+        action="store_true",
+        help="Raise if a sign-reweighted density consistency check fails.",
+    )
+    parser.add_argument(
+        "--imag_tol",
+        type=float,
+        default=1e-10,
+        help=(
+            "Imaginary-part tolerance for plotting. Complex estimates are "
+            "always preserved in the saved .npy output."
+        ),
+    )
+    return parser.parse_args()
+
+
+def _parse_temperature(directory: str) -> float:
+    name = os.path.basename(os.path.normpath(directory))
+    if not name.startswith("T_"):
+        raise ValueError(f"cannot parse temperature from directory {directory}")
+    temperature = float(name[2:])
+    if not np.isfinite(temperature) or temperature <= 0:
+        raise ValueError(f"invalid temperature in directory {directory}")
+    return temperature
 
 
 def main() -> None:
     args = parse_args()
-    root = args.root
-
-    T_list = []
-    mz2_mean_list = []
-    mz2_err_list = []
+    root = os.path.expanduser(args.root)
+    if not os.path.isdir(root):
+        raise FileNotFoundError(
+            f"Root path not found or not a directory: {root}"
+        )
+    if args.tol_density < 0 or args.tol_spin < 0 or args.imag_tol < 0:
+        raise ValueError("all tolerances must be non-negative")
 
     t_dirs = sorted(glob.glob(os.path.join(root, "T_*")))
+    t_dirs = [directory for directory in t_dirs if os.path.isdir(directory)]
     if not t_dirs:
-        raise SystemExit(f"No T_* subdirectories found under: {root}")
+        raise FileNotFoundError(f"No T_* subdirectories found under: {root}")
 
-    for d in t_dirs:
-        base = os.path.basename(d)
+    results = []
+    for directory in t_dirs:
         try:
-            T = float(base.split("_", 1)[1])
-        except Exception:
-            continue
-
-        fps = sorted(glob.glob(os.path.join(d, args.h5_glob)))
-        if not fps:
+            temperature = _parse_temperature(directory)
+            result = analyze_temperature_dir(
+                directory=directory,
+                temperature=temperature,
+                expected_U=args.U,
+                h5_glob=args.h5_glob,
+                tol_density=args.tol_density,
+                tol_spin=args.tol_spin,
+                strict_checks=args.strict_checks,
+            )
+        except Exception as exc:
             if args.skip_missing:
-                print(f"[SKIP] {base}: no files matching {args.h5_glob}")
+                print(f"[SKIP] {directory}: {exc}", file=sys.stderr)
                 continue
-            raise FileNotFoundError(f"No h5 files matching {args.h5_glob} under {d}")
+            raise
 
-        vals = []
-        bad = 0
-        dens_bad = 0
-        spin_bad = 0
-        for fp in fps:
-            try:
-                mz2_i, dens_mismatch, spin_mismatch = _per_file_mz2(
-                    fp, args.tol_density, args.tol_spin, args.strict_checks
-                )
-                vals.append(mz2_i)
-                if dens_mismatch:
-                    dens_bad += 1
-                if spin_mismatch:
-                    spin_bad += 1
-            except Exception:
-                bad += 1
-
-        vals = np.array(vals, dtype=float)
-        if vals.size == 0:
-            if args.skip_missing:
-                print(f"[SKIP] {base}: no valid files (failed={bad})")
-                continue
-            raise RuntimeError(f"{base}: all files failed (failed={bad})")
-
-        mean = float(vals.mean())
-        err = float(vals.std(ddof=1) / np.sqrt(vals.size)) if vals.size > 1 else 0.0
-
-        T_list.append(T)
-        mz2_mean_list.append(mean)
-        mz2_err_list.append(err)
-
+        results.append(result)
         print(
-            f"[OK] {base}: N={vals.size} failed={bad}  <mz2>={mean:.6g}  err={err:.3g}  "
-            f"dens_mismatch={dens_bad}  spin_mismatch={spin_bad}"
+            f"[OK] T_{temperature:g}: completed={result['nbin']} "
+            f"incomplete={result['n_incomplete']} "
+            f"failed={result['n_failed']} "
+            f"<mz2>={result['mz2_mean']!s} "
+            f"err={result['mz2_stderr']:.6g} "
+            f"avg_sign={result['avg_sign']!s} "
+            f"density_mismatch={result['density_mismatch']} "
+            f"spin_mismatch={result['spin_mismatch']}"
         )
 
-    # sort by T
-    T = np.array(T_list, dtype=float)
-    mz2 = np.array(mz2_mean_list, dtype=float)
-    mz2err = np.array(mz2_err_list, dtype=float)
-    idx = np.argsort(T)
-    T, mz2, mz2err = T[idx], mz2[idx], mz2err[idx]
+    if not results:
+        raise RuntimeError("No temperature directories were processed")
 
-    # save
-    np.save(os.path.join(root, f"{args.out_prefix}_T.npy"), T)
+    results.sort(key=lambda item: item["temperature"])
+    temperature = np.asarray(
+        [item["temperature"] for item in results],
+        dtype=float,
+    )
+    mz2 = np.asarray([item["mz2_mean"] for item in results])
+    mz2_stderr = np.asarray(
+        [item["mz2_stderr"] for item in results],
+        dtype=float,
+    )
+    avg_sign = np.asarray([item["avg_sign"] for item in results])
+    nbin = np.asarray([item["nbin"] for item in results], dtype=int)
+
+    np.save(os.path.join(root, f"{args.out_prefix}_T.npy"), temperature)
     np.save(os.path.join(root, f"{args.out_prefix}_mz2.npy"), mz2)
-    np.save(os.path.join(root, f"{args.out_prefix}_mz2_err.npy"), mz2err)
+    np.save(
+        os.path.join(root, f"{args.out_prefix}_mz2_err.npy"),
+        mz2_stderr,
+    )
+    np.save(
+        os.path.join(root, f"{args.out_prefix}_avg_sign.npy"),
+        avg_sign,
+    )
+    np.save(os.path.join(root, f"{args.out_prefix}_nbin.npy"), nbin)
 
-    # plot
-    plt.figure()
-    plt.errorbar(T, mz2, yerr=mz2err, fmt="o", capsize=2)
+    mz2_real = np.real(mz2)
+    if np.iscomplexobj(mz2):
+        imag_max = float(np.max(np.abs(np.imag(mz2))))
+        real_scale = float(np.max(np.abs(mz2_real)))
+        tolerance = max(args.imag_tol, args.imag_tol * real_scale)
+        if imag_max > tolerance:
+            print(
+                "[WARN] local moment has a non-negligible imaginary part "
+                f"(max |imag|={imag_max:g}); saved complex values and "
+                "plotted only the real part",
+                file=sys.stderr,
+            )
 
-    # Smooth-looking connecting curve via interpolation in log10(T)
-    x_dense = None
-    T_dense = None
-    if T.size >= 2:
-        x = np.log10(T)
-        x_dense = np.linspace(x.min(), x.max(), 400)
-        T_dense = 10**x_dense
-        y_dense = np.interp(x_dense, x, mz2)
-        # Light-blue connecting curve
-        plt.plot(T_dense, y_dense, linewidth=2.0, alpha=0.45, color="#4DA3FF")
+    figure, axis = plt.subplots()
+    axis.errorbar(
+        temperature,
+        mz2_real,
+        yerr=mz2_stderr,
+        fmt="o",
+        capsize=2,
+        label="DQMC (real part)",
+    )
 
-    # Atomic limit (t=0) reference curve:
-    #   <m_z^2> = 1 / (exp(-U/(2T)) + 1)
-    # Use a dense T grid if available; otherwise evaluate on the data points.
-    if T_dense is None:
-        T_dense = T
-    mz2_atomic = 1.0 / (np.exp(-args.U / (2.0 * T_dense)) + 1.0)
-    plt.plot(T_dense, mz2_atomic, linestyle="--", linewidth=1.8, color="orange", alpha=0.8,
-             label=r"atomic limit $t=0$")
+    if temperature.size >= 2:
+        log_temperature = np.log10(temperature)
+        dense_log_temperature = np.linspace(
+            log_temperature.min(),
+            log_temperature.max(),
+            400,
+        )
+        dense_temperature = 10 ** dense_log_temperature
+        dense_mz2 = np.interp(
+            dense_log_temperature,
+            log_temperature,
+            mz2_real,
+        )
+        axis.plot(
+            dense_temperature,
+            dense_mz2,
+            linewidth=2.0,
+            alpha=0.45,
+            color="#4DA3FF",
+        )
+    else:
+        dense_temperature = temperature
 
-    plt.legend(frameon=False)
+    exponent = np.clip(
+        -args.U / (2.0 * dense_temperature),
+        -700.0,
+        700.0,
+    )
+    atomic_mz2 = 1.0 / (np.exp(exponent) + 1.0)
+    axis.plot(
+        dense_temperature,
+        atomic_mz2,
+        linestyle="--",
+        linewidth=1.8,
+        color="orange",
+        alpha=0.8,
+        label=r"atomic limit $t=0$",
+    )
 
-    plt.xscale("log")
-    plt.xlabel("T")
-    plt.ylabel(r"$\langle m_z^2 \rangle$")
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    out_png = os.path.join(root, f"{args.out_prefix}_mz2_vs_T.png")
-    plt.savefig(out_png, dpi=160)
-    print("Saved:", out_png)
+    axis.set_xscale("log")
+    axis.set_xlabel("T")
+    axis.set_ylabel(r"$\langle m_z^2 \rangle$")
+    axis.grid(alpha=0.3)
+    axis.legend(frameon=False)
+    figure.tight_layout()
+    output_png = os.path.join(
+        root,
+        f"{args.out_prefix}_mz2_vs_T.png",
+    )
+    figure.savefig(output_png, dpi=160)
+    plt.close(figure)
+    print(f"Saved: {output_png}")
 
 
 if __name__ == "__main__":

@@ -4,35 +4,50 @@
 import argparse
 from pathlib import Path
 from collections import defaultdict
-import numpy as np
-
-try:
-    import h5py
-except ImportError as e:
-    raise SystemExit("Need h5py. Activate your dqmc conda env first.") from e
+import re
+import subprocess
 
 
-def n_sample_max(h5_path: Path):
-    """Return (ok, ns_max). ok=False if dataset missing or unreadable."""
+def log_indicates_complete(h5_path: Path):
+    """Return (ok_log, is_complete, total_sweeps, last_reported_sweeps) based on the sibling .h5.log file.
+
+    Complete means the log contains a line of the form
+    'N/N sweeps completed' with equal integers N, and later contains both
+    'saving data to disk' and 'sim_data_save() succeeded'.
+    """
+    log_path = Path(str(h5_path) + ".log")
     try:
-        with h5py.File(h5_path, "r") as f:
-            if "meas_eqlt/n_sample" not in f:
-                return False, np.nan
-            ns = f["meas_eqlt/n_sample"][...]
-            # ns can be vector or matrix; take global max
-            return True, float(np.nanmax(ns))
+        text = log_path.read_text(encoding="utf-8", errors="replace")
     except Exception:
-        return False, np.nan
+        return False, False, "", ""
+
+    sweep_pat = re.compile(r"(\d+)\s*/\s*(\d+)\s+sweeps completed")
+    matches = list(sweep_pat.finditer(text))
+    if not matches:
+        return True, False, "", ""
+
+    last_reported_sweeps = matches[-1].group(1)
+    total_sweeps = matches[-1].group(2)
+
+    for m in matches:
+        if m.group(1) != m.group(2):
+            continue
+        tail = text[m.end():]
+        if "saving data to disk" in tail and "sim_data_save() succeeded" in tail:
+            return True, True, m.group(2), matches[-1].group(1)
+
+    return True, False, total_sweeps, last_reported_sweeps
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--root",
+        required=True,
         help="Root directory to scan",
     )
-    ap.add_argument("--out", default="h5_completion_report.tsv")
     ap.add_argument("--glob", default="n*/T*_beta*_U*/mu*/*.h5")
+    ap.add_argument("--push_stack", type=str, required=False)
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
@@ -41,46 +56,54 @@ def main():
     if not files:
         raise SystemExit(f"No .h5 files found under {root} with glob {args.glob}")
 
-    # First pass: compute n_sample.max per file, group by mu directory
-    per_dir = defaultdict(list)  # mu_dir -> list of (file, ok, nsmax)
+    # First pass: inspect sibling .h5.log per file, group by mu directory
+    per_dir = defaultdict(list)
     for fp in files:
-        ok, nsmax = n_sample_max(fp)
-        per_dir[fp.parent].append((fp, ok, nsmax))
+        ok_log, is_complete, total_sweeps, last_reported_sweeps = log_indicates_complete(fp)
+        per_dir[fp.parent].append((fp, ok_log, is_complete, total_sweeps, last_reported_sweeps))
 
-    # Second pass: for each mu_dir, define "dir_max" = max nsmax among readable files
+    # Second pass: report completion directly from the sibling .h5.log
     lines = []
-    lines.append("mu_dir\tfile\tok_n_sample\tn_sample_max\tdir_max\tis_complete_in_dir\n")
+    lines.append("dir\tfile\tok_log\tis_complete\ttotal_sweeps\tlast_reported_sweeps\n")
 
     n_total = 0
     n_incomplete = 0
     n_bad = 0
 
-    for mu_dir, items in sorted(per_dir.items(), key=lambda kv: str(kv[0])):
-        # max over ok items
-        ok_vals = [ns for _, ok, ns in items if ok and np.isfinite(ns)]
-        dir_max = max(ok_vals) if ok_vals else np.nan
+    stack = None
+    incomplete_files = []
+    if args.push_stack is not None:
+        stack = root / args.push_stack
 
-        for fp, ok, nsmax in items:
+    for subdir, items in sorted(per_dir.items(), key=lambda kv: str(kv[0])):
+        for fp, ok_log, is_complete, total_sweeps, last_reported_sweeps in items:
             n_total += 1
-            if not ok:
+            if not ok_log:
                 n_bad += 1
                 is_complete = False
-            else:
-                # complete if nsmax equals dir_max (within tiny tolerance)
-                is_complete = np.isfinite(dir_max) and abs(nsmax - dir_max) <= 1e-9
-                if not is_complete:
-                    n_incomplete += 1
+                incomplete_files.append(fp)
+            elif not is_complete:
+                n_incomplete += 1
+                incomplete_files.append(fp)
 
             lines.append(
-                f"{mu_dir}\t{fp}\t{int(ok)}\t{nsmax:.12g}\t{dir_max:.12g}\t{int(is_complete)}\n"
+                f"{subdir}\t{fp}\t{int(ok_log)}\t{int(is_complete)}\t{total_sweeps}\t{last_reported_sweeps}\n"
             )
 
-    Path(args.out).write_text("".join(lines), encoding="utf-8")
+    output = root / "h5_completion_report.tsv"
+    Path(output).write_text("".join(lines), encoding="utf-8")
 
-    print(f"Wrote {args.out}")
+    print(f"Wrote {output}")
     print(f"Total files: {n_total}")
-    print(f"Missing/unreadable n_sample: {n_bad}")
-    print(f"Incomplete (nsmax < dir_max within same mu_dir): {n_incomplete}")
+    print(f"Missing/unreadable .h5.log: {n_bad}")
+    print(f"Incomplete (log does not show finished sweeps + successful save): {n_incomplete}")
+    if args.push_stack is not None:
+        subprocess.run(
+            ["python3", "/home/users/phoenixm/dqmc-dev/util/push.py", str(stack), *[str(fp.relative_to(root)) for fp in incomplete_files]],
+            cwd=str(root),
+            check=True,
+        )
+        print(f"Incomplete files pushed back to {stack}")
 
 
 if __name__ == "__main__":

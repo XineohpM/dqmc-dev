@@ -2,8 +2,8 @@
 #SBATCH --time=48:00:00
 #SBATCH --partition=owners
 #SBATCH --requeue #in case of preemption, requeue
-#SBATCH --array=1-512
-#SBATCH --ntasks=8
+#SBATCH --array=1-256
+#SBATCH --ntasks=16
 #SBATCH --cpus-per-task=2
 #SBATCH --qos=normal #or: high_p
 #SBATCH --mail-type=FAIL 
@@ -17,15 +17,17 @@ if [ -n "$1" ]; then
 elif [ -n "$OUTPUT_DIR" ]; then
   OUTPUT_DIR="$OUTPUT_DIR"
 else
-  OUTPUT_DIR="$SCRATCH/dqmc_runs/U6_tp0_N6x6"
+  echo "ERROR: OUTPUT_DIR not set and no positional output directory provided"
+  exit 1
 fi
 
+# Add slash after OUTPUT_DIR
 case "$OUTPUT_DIR" in
   */) ;;
   *) OUTPUT_DIR="${OUTPUT_DIR}/" ;;
 esac
 
-# Create the directory if it doesn't exist and verify writability
+# Create OUTPUT_DIR if it doesn't exist and verify writability
 mkdir -p "$OUTPUT_DIR"
 if [ ! -w "$OUTPUT_DIR" ]; then
   echo "ERROR: cannot write to $OUTPUT_DIR"
@@ -56,14 +58,15 @@ if [ ! -w "$STACKFILE" ]; then
 fi
 # --- end stackfile selection ---
 
-EXEC_DIR="${EXEC_DIR:-${HOME}/dqmc-dev/build}"
+EXEC_DIR="${EXEC_DIR:-${HOME}/executable}"
 # --- choose DQMC binary: real vs complex ---
-# Priority: explicit $DQMC_BIN > $DQMC_VARIANT (cplx/real) > $DQMC_COMPLEX (1/0) > default real
+# Priority: explicit $DQMC_BIN > $DQMC_VARIANT (cplx/real/negU) > $DQMC_COMPLEX (1/0) > default real
 DQMC_BIN="${DQMC_BIN:-}"
 if [ -z "$DQMC_BIN" ]; then
   case "${DQMC_VARIANT:-}" in
     cplx|complex|CPLX|COMPLEX) DQMC_BIN="dqmc_stack_cplx" ;;
     real|REAL|"")             DQMC_BIN="dqmc_stack" ;;
+    negU|neg|NEG|negative)    DQMC_BIN="dqmc_stack_negU" ;;
     *)                         DQMC_BIN="dqmc_stack" ;;
   esac
 fi
@@ -73,10 +76,10 @@ fi
 DQMC_BIN="${DQMC_BIN:-dqmc_stack}"
 # --- end selection ---
 if [ ! -x "${EXEC_DIR}/${DQMC_BIN}" ]; then
-  if [ -x "${SCRATCH}/dqmc_runs/myrun/${DQMC_BIN}" ]; then
-    EXEC_DIR="${SCRATCH}/dqmc_runs/myrun"
+  if [ -x "${HOME}/executable/${DQMC_BIN}" ]; then
+    EXEC_DIR="${HOME}/executable"
   else
-    echo "ERROR: ${DQMC_BIN} not found or not executable in ${EXEC_DIR} nor ${SCRATCH}/dqmc_runs/myrun"
+    echo "ERROR: ${DQMC_BIN} not found or not executable in ${EXEC_DIR} nor ${HOME}/executable"
     echo "Please set EXEC_DIR to the directory containing ${DQMC_BIN} (export EXEC_DIR=/path/to/dir)"
     exit 1
   fi
@@ -90,7 +93,8 @@ echo "Save Directory = $OUTPUT_DIR"
 echo "Stackfile        = $STACKFILE"
 echo ""
 echo "Number of Nodes Allocated      = $SLURM_JOB_NUM_NODES"
-echo "Number of Tasks Allocated      = $SLURM_CPUS_PER_TASK"
+echo "Number of Tasks Allocated      = $SLURM_NTASKS"
+echo "CPUs per Task                  = $SLURM_CPUS_PER_TASK"
 
 module load hdf5/1.10.2 icc/2019 imkl/2019 python/3.9.0
 module list #double check module list

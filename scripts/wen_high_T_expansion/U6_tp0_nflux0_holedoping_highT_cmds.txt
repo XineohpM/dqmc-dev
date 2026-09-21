@@ -1,0 +1,54 @@
+sbatch --job-name=htU6_n0p6_o9 \
+  --partition=owners \
+  --cpus-per-task=1 \
+  --mem=64G \
+  --time=48:00:00 \
+  --output=/home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion/slurm_logs/htU6_n0p6_o9_%j.out \
+  --mail-type=COMPLETED,FAIL \
+  --mail-user=phoenixm@stanford.edu \
+  --requeue \
+  --wrap='cd /home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion && g++ -std=c++17 -Wall -Wextra -O3 -march=native main_tp0_all.cpp -o ht_moments_${SLURM_JOB_ID} && ./ht_moments_${SLURM_JOB_ID} 6 0.30 9 > U6_n0p6_o9.txt'
+
+sbatch --job-name=htU6_n0p7_o9 \
+  --partition=owners \
+  --cpus-per-task=1 \
+  --mem=64G \
+  --time=48:00:00 \
+  --output=/home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion/slurm_logs/htU6_n0p7_o9_%j.out \
+  --mail-type=COMPLETED,FAIL \
+  --mail-user=phoenixm@stanford.edu \
+  --requeue \
+  --wrap='cd /home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion && g++ -std=c++17 -Wall -Wextra -O3 -march=native main_tp0_all.cpp -o ht_moments_${SLURM_JOB_ID} && ./ht_moments_${SLURM_JOB_ID} 6 0.35 9 > U6_n0p7_o9.txt'
+
+sbatch --job-name=htU6_n0p8_o9 \
+  --partition=owners \
+  --cpus-per-task=1 \
+  --mem=64G \
+  --time=48:00:00 \
+  --output=/home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion/slurm_logs/htU6_n0p8_o9_%j.out \
+  --mail-type=COMPLETED,FAIL \
+  --mail-user=phoenixm@stanford.edu \
+  --requeue \
+  --wrap='cd /home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion && g++ -std=c++17 -Wall -Wextra -O3 -march=native main_tp0_all.cpp -o ht_moments_${SLURM_JOB_ID} && ./ht_moments_${SLURM_JOB_ID} 6 0.40 9 > U6_n0p8_o9.txt'
+
+sbatch --job-name=htU6_n0p9_o9 \
+  --partition=owners \
+  --cpus-per-task=1 \
+  --mem=64G \
+  --time=48:00:00 \
+  --output=/home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion/slurm_logs/htU6_n0p9_o9_%j.out \
+  --mail-type=COMPLETED,FAIL \
+  --mail-user=phoenixm@stanford.edu \
+  --requeue \
+  --wrap='cd /home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion && g++ -std=c++17 -Wall -Wextra -O3 -march=native main_tp0_all.cpp -o ht_moments_${SLURM_JOB_ID} && ./ht_moments_${SLURM_JOB_ID} 6 0.45 9 > U6_n0p9_o9.txt'
+
+sbatch --job-name=htU6_n1_o9 \
+  --partition=owners \
+  --cpus-per-task=1 \
+  --mem=64G \
+  --time=48:00:00 \
+  --output=/home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion/slurm_logs/htU6_n1_o9_%j.out \
+  --mail-type=COMPLETED,FAIL \
+  --mail-user=phoenixm@stanford.edu \
+  --requeue \
+  --wrap='cd /home/users/phoenixm/dqmc-dev/scripts/wen_high_T_expansion && g++ -std=c++17 -Wall -Wextra -O3 -march=native main_tp0_all.cpp -o ht_moments_${SLURM_JOB_ID} && ./ht_moments_${SLURM_JOB_ID} 6 0.50 9 > U6_n1_o9.txt'

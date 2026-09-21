@@ -42,8 +42,13 @@ def load_sigma(dpath: str, prefix: str, divide_pi: bool = True):
     Load omega and s_all, drop bootstrap rows that are not finite, then return:
       omega: (Nw,)
       sigma_mean: (Nw,)
-      sigma_p16/p84: (Nw,)  (computed across bootstrap samples)
+      sigma_bootstrap_std: (Nw,)  (bootstrap uncertainty)
       n_good, n_tot
+
+    The bootstrap standard deviation estimates the sampling uncertainty of the
+    spectrum.  It must not be divided by sqrt(number of bootstrap replicates).
+    With only one valid spectrum the uncertainty is undefined and returned as
+    NaN.
     """
     sp = os.path.join(dpath, prefix + "s_all.npy")
     wp = os.path.join(dpath, prefix + "omega.npy")
@@ -66,10 +71,13 @@ def load_sigma(dpath: str, prefix: str, divide_pi: bool = True):
         good = good / np.pi
 
     sigma_mean = good.mean(axis=0)
-    sigma_p16 = np.percentile(good, 16, axis=0)
-    sigma_p84 = np.percentile(good, 84, axis=0)
+    sigma_bootstrap_std = (
+        good.std(axis=0, ddof=1)
+        if n_good > 1
+        else np.full_like(sigma_mean, np.nan, dtype=float)
+    )
 
-    return omega, sigma_mean, sigma_p16, sigma_p84, n_good, n_tot
+    return omega, sigma_mean, sigma_bootstrap_std, n_good, n_tot
 
 def main():
     ap = argparse.ArgumentParser(
@@ -91,7 +99,7 @@ def main():
     ap.add_argument("--ymax", type=float, default=None,
                     help="Optional y-axis max. Default: auto.")
     ap.add_argument("--no_band", action="store_true",
-                    help="If set, do not draw 16-84% bootstrap band.")
+                    help="If set, do not draw the bootstrap-uncertainty band.")
     args = ap.parse_args()
 
     curves = []
@@ -100,8 +108,18 @@ def main():
         T = float(Tstr)
         dpath = os.path.join(args.base, rel)
 
-        omega, mu, p16, p84, ng, nt = load_sigma(dpath, pfx, divide_pi=args.divide_pi)
-        curves.append((T, omega, mu, p16, p84, ng, nt))
+        omega, mu, bootstrap_std, ng, nt = load_sigma(
+            dpath,
+            pfx,
+            divide_pi=args.divide_pi,
+        )
+        if ng < 2 and not args.no_band:
+            raise RuntimeError(
+                f"Only one valid bootstrap spectrum in {dpath} "
+                f"(prefix={pfx}); use --no_band or provide at least two "
+                "valid spectra"
+            )
+        curves.append((T, omega, mu, bootstrap_std, ng, nt))
 
     # Sort by T descending (optional); change to ascending if you prefer
     curves.sort(key=lambda x: x[0], reverse=True)
@@ -111,21 +129,23 @@ def main():
     colors = cmap(np.linspace(0.90, 0.10, len(curves)))
 
     # Plot
-    plt.figure(figsize=(7.4, 5.0))
+    plt.figure(figsize=(5.0, 6.5))
     xmax = 0.0
     ymin = +np.inf
     ymax = -np.inf
 
-    for i, (T, w, mu, p16, p84, ng, nt) in enumerate(curves):
+    for i, (T, w, mu, bootstrap_std, ng, nt) in enumerate(curves):
+        lower = mu - bootstrap_std
+        upper = mu + bootstrap_std
         xmax = max(xmax, float(np.max(w)))
-        ymin = min(ymin, float(np.min(p16 if not args.no_band else mu)))
-        ymax = max(ymax, float(np.max(p84 if not args.no_band else mu)))
+        ymin = min(ymin, float(np.min(lower if not args.no_band else mu)))
+        ymax = max(ymax, float(np.max(upper if not args.no_band else mu)))
 
         # label = f"T = {T:g}  (good {ng}/{nt})"
-        label = f"T = {T:g}"
+        label = f"T/t = {T:g}"
         plt.plot(w, mu, lw=2, label=label, color=colors[i])
         if not args.no_band:
-            plt.fill_between(w, p16, p84, alpha=0.20, linewidth=0, color=colors[i])
+            plt.fill_between(w, lower, upper, alpha=0.20, linewidth=0, color=colors[i])
 
         # Console summary
         print(f"T={T:g}  good={ng}/{nt}  omega_max={w.max():.3f}  "
@@ -138,9 +158,9 @@ def main():
     yhi = args.ymax if args.ymax is not None else max(0.10, ymax*1.05)
     plt.ylim(ylo, yhi)
 
-    plt.xlabel(r'$\omega$')
-    plt.ylabel(r'$\sigma(\omega)$')
-    plt.grid(alpha=0.25, ls=':')
+    plt.xlabel(r'$\omega/t$')
+    plt.ylabel(r'$\sigma_{xx}\ \left[e^{2} / \hbar\right]$')
+    #plt.grid(alpha=0.25, ls=':')
     plt.legend(frameon=False)
     plt.tight_layout()
     outpath = os.path.expanduser(args.out)

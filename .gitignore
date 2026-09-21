@@ -234,3 +234,14 @@ cython_debug/
 #.idea/
 
 
+# MacOS
+.DS_Store
+
+# Temporary tests and logs
+scripts/High_T_expansion.ipynb
+test/attractive_Hubbard_tests.md
+slurm_logs/
+
+# Docs
+scripts/*.md
+test/test_compute_specific_heat.py

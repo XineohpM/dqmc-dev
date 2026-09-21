@@ -1,15 +1,3 @@
-'''
-plot_charge_order.py
-
-Usage Example:
-
- python3 /home/users/phoenixm/scripts/plot_charge_order.py \
-   --path /scratch/users/phoenixm/dqmc_runs/U-6_8x8_tp0_nflux0/half_filling \
-   --glob 'T*_beta*_U*/mu*' \
-   --out_prefix charge_order \
-   --vlim 0.8
-'''
-
 import os, sys
 import glob
 import argparse
@@ -24,12 +12,15 @@ sys.path.insert(0, str(utilpath))
 import util
 
 def get_meas(file: str):
-    nn, n, sign, nsamp, beta, U, Nx, Ny = util.load_file(
-        file, "meas_eqlt/nn", "meas_eqlt/density", "meas_eqlt/sign",
+    zz, xx, dens_u, dens_d, sign, nsamp, beta, U, Nx, Ny = util.load_file(
+        file, "meas_eqlt/zz", "meas_eqlt/xx",
+        "meas_eqlt/density_u", "meas_eqlt/density_d", "meas_eqlt/sign",
         "meas_eqlt/n_sample", "metadata/beta", "metadata/U",
         "metadata/Nx", "metadata/Ny")
-    nn = np.asarray(nn, dtype=float).reshape(-1)
-    n = float(np.asarray(n, dtype=float).reshape(-1)[0])
+    zz = np.asarray(zz, dtype=float).reshape(-1)
+    xx = np.asarray(xx, dtype=float).reshape(-1)
+    dens_u = float(np.asarray(dens_u, dtype=float).reshape(-1)[0])
+    dens_d = float(np.asarray(dens_d, dtype=float).reshape(-1)[0])
     sign = float(np.asarray(sign, dtype=float).reshape(-1)[0])
     nsamp = int(np.asarray(nsamp).reshape(-1)[0])
     beta = float(np.asarray(beta, dtype=float).reshape(-1)[0])
@@ -37,10 +28,11 @@ def get_meas(file: str):
     Nx0 = int(np.asarray(Nx).reshape(-1)[0])
     Ny0 = int(np.asarray(Ny).reshape(-1)[0])
     nsite = Nx0 * Ny0
-    return nn, n, sign, nsamp, beta, U, nsite, Nx0, Ny0
+    return zz, xx, dens_u, dens_d, sign, nsamp, beta, U, nsite, Nx0, Ny0
 
-def C_to_Sq(nsamp, sign, dens, nn, Ny, Nx):
-    C = (nn.T / sign).T - (np.asarray(dens / sign)**2)[..., None]
+def C_to_Sq(nsamp, sign, dens_u, dens_d, zz, Ny, Nx):
+    mz = 0.5 * ((dens_u / sign) - (dens_d / sign))
+    C = (zz.T / sign).T - (np.asarray(mz)**2)[..., None]
     if C.ndim == 1:
         C = C.reshape(Ny, Nx)
     else:
@@ -51,15 +43,16 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
     '''
     Process a single directory containing HDF5 bins. These bins should ideally be with
     the same T, U, mu, and n. Plotting the bubble maps for staggered and non-staggered 
-    charge order, and the 2D map of S(q). Returning T and S_CDW.
+    spin order, and the 2D map of S(q). Returning T and S_zz.
     '''
     files = sorted(glob.glob(os.path.join(run_path, "*.h5")))
     if not files:
         raise FileNotFoundError(f"No .h5 files found in {run_path}")
 
-    nn0, n0, sign0, nsamp0, beta0, U0, Nx0, Ny0 = util.load_firstfile(
+    zz0, xx0, dens_u0, dens_d0, sign0, nsamp0, beta0, U0, Nx0, Ny0 = util.load_firstfile(
         os.path.join(run_path, ""),
-        "meas_eqlt/nn", "meas_eqlt/density", "meas_eqlt/sign",
+        "meas_eqlt/zz", "meas_eqlt/xx",
+        "meas_eqlt/density_u", "meas_eqlt/density_d", "meas_eqlt/sign",
         "meas_eqlt/n_sample", "metadata/beta", "metadata/U",
         "metadata/Nx", "metadata/Ny")
     Nx = int(np.asarray(Nx0).reshape(-1)[0])
@@ -70,36 +63,43 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
 
     bins_nsamp = []
     bins_sign = []
-    bins_dens = []
-    bins_nn = []
+    bins_dens_u = []
+    bins_dens_d = []
+    bins_zz = []
 
     for file in files:
-        nn, n, sign, nsamp, beta_i, U, nsite, Nx_m, Ny_m = get_meas(file)
+        zz, xx, dens_u, dens_d, sign, nsamp, beta_i, U, nsite, Nx_m, Ny_m = get_meas(file)
         beta_bin = float(np.asarray(beta_i, dtype=float).reshape(-1)[0])
         if not np.isclose(beta, beta_bin):
             raise ValueError(f"Beta of bin ({beta_bin}) does not match with beta of the firstfile ({beta})")
         if Nx_m != Nx or Ny_m != Ny or nsite != N:
             raise ValueError(f"Inconsistent lattice size in {file}: got {Nx_m}x{Ny_m}, expected {Nx}x{Ny}")
-        if nn.shape[0] != N:
-            raise ValueError(f"Unexpected nn length in {file}: got {nn.shape[0]}, expected {N}")
+        if zz.shape[0] != N:
+            raise ValueError(f"Unexpected zz length in {file}: got {zz.shape[0]}, expected {N}")
         bins_nsamp.append(nsamp)
         bins_sign.append(sign)
-        bins_dens.append(n)
-        bins_nn.append(nn.copy())
+        bins_dens_u.append(dens_u)
+        bins_dens_d.append(dens_d)
+        bins_zz.append(zz.copy())
 
     bins_nsamp = np.asarray(bins_nsamp, dtype=float)
     bins_sign = np.asarray(bins_sign, dtype=float)
-    bins_dens = np.asarray(bins_dens, dtype=float)
-    bins_nn = np.asarray(bins_nn, dtype=float)
+    bins_dens_u = np.asarray(bins_dens_u, dtype=float)
+    bins_dens_d = np.asarray(bins_dens_d, dtype=float)
+    bins_zz = np.asarray(bins_zz, dtype=float)
 
     C_jk = util.jackknife_noniid(
         bins_nsamp,
         bins_sign,
-        bins_dens,
-        bins_nn,
-        f=lambda nsamp, sign, dens, nn: (nn.T / sign).T - ((dens / sign)**2)[..., None],
+        bins_dens_u,
+        bins_dens_d,
+        bins_zz,
+        f=lambda nsamp, sign, dens_u, dens_d, zz: (
+            (zz.T / sign).T
+            - (np.asarray(0.5 * ((dens_u / sign) - (dens_d / sign))) ** 2)[..., None]
+        ),
     )
-    # Connected equal-time charge correlation: C(r) = <n_0 n_r> - <n>^2
+    # Connected equal-time spin correlation: C(r) = <S_0^z S_r^z> - <S^z>^2
     C_mean = np.asarray(C_jk[0], dtype=float)
     C_err = np.asarray(C_jk[1], dtype=float)
 
@@ -111,32 +111,39 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
     eta_flat = eta.reshape(-1)
     C_stag = eta * C_map
 
-    # Equal-time CDW structure factor at Q=(pi,pi), with jackknife error.
-    S_cdw_jk = util.jackknife_noniid(
+    # Equal-time spin structure factor at Q=(pi,pi), with jackknife error.
+    S_zz_jk = util.jackknife_noniid(
         bins_nsamp,
         bins_sign,
-        bins_dens,
-        bins_nn,
-        f=lambda nsamp, sign, dens, nn: np.sum(
-            eta_flat * ((nn.T / sign).T - ((dens / sign)**2)[..., None]),
+        bins_dens_u,
+        bins_dens_d,
+        bins_zz,
+        f=lambda nsamp, sign, dens_u, dens_d, zz: np.sum(
+            eta_flat * (
+                (zz.T / sign).T
+                - (np.asarray(0.5 * ((dens_u / sign) - (dens_d / sign))) ** 2)[..., None]
+            ),
             axis=-1,
         ),
     )
-    S_cdw = float(S_cdw_jk[0])
-    S_cdw_err = float(S_cdw_jk[1])
+    S_zz = float(S_zz_jk[0])
+    S_zz_err = float(S_zz_jk[1])
 
-    # S_CDW(q)
+    # S_zz(q)
     S_q_jk = util.jackknife_noniid(
         bins_nsamp,
         bins_sign,
-        bins_dens,
-        bins_nn,
-        f=lambda nsamp, sign, dens, nn: C_to_Sq(nsamp, sign, dens, nn, Ny, Nx),
+        bins_dens_u,
+        bins_dens_d,
+        bins_zz,
+        f=lambda nsamp, sign, dens_u, dens_d, zz: C_to_Sq(
+            nsamp, sign, dens_u, dens_d, zz, Ny, Nx
+        ),
     )
     S_q_mean = np.asarray(S_q_jk[0], dtype=float)
     S_q_err = np.asarray(S_q_jk[1], dtype=float)
 
-    # Plot S_CDW(q) in momentum space. fftshift moves q=(0,0) to the center;
+    # Plot S_zz(q) in momentum space. fftshift moves q=(0,0) to the center;
     # for even Nx, Ny, q=(pi,pi) is equivalent to (-pi,-pi) and appears at the BZ corner.
     S_q_plot = np.fft.fftshift(S_q_mean)
     qx_over_pi = np.fft.fftshift(np.fft.fftfreq(Nx, d=1.0)) * 2.0
@@ -144,7 +151,7 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
 
     fig, ax = plt.subplots(figsize=(5.2, 4.6))
     im = ax.imshow(S_q_plot, origin="lower", aspect="equal")
-    fig.colorbar(im, ax=ax, pad=0.02, label=r"$S_{CDW}(q)$")
+    fig.colorbar(im, ax=ax, pad=0.02, label=r"$S_{zz}(q)$")
     ax.set_xlabel(r"$q_x/\pi$")
     ax.set_ylabel(r"$q_y/\pi$")
     ax.set_xticks(np.arange(Nx))
@@ -156,11 +163,16 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
     ax.text(0.15, 0.15, r"$(\pi,\pi)$", color="black", fontsize=9,
             ha="left", va="bottom")
     fig.tight_layout()
-    fig.savefig(os.path.join(run_path, f"{out_prefix}_S_cdw_qspace.png"), dpi=200)
+    fig.savefig(os.path.join(run_path, f"{out_prefix}_S_zz_qspace.png"), dpi=200)
     plt.close(fig)
 
-    np.save(os.path.join(run_path, f"{out_prefix}_S_cdw_qspace_mean.npy"), S_q_mean)
-    np.save(os.path.join(run_path, f"{out_prefix}_S_cdw_qspace_err.npy"), S_q_err)
+    np.save(os.path.join(run_path, f"{out_prefix}_S_zz_qspace_mean.npy"), S_q_mean)
+    np.save(os.path.join(run_path, f"{out_prefix}_S_zz_qspace_err.npy"), S_q_err)
+
+    S_zz_00 = float(S_q_mean[0, 0])
+    S_zz_00_err = float(S_q_err[0, 0])
+    chi_mean = beta * S_zz_00
+    chi_err = beta * S_zz_00_err
 
     # Check if S_q peaks at (pi,pi)
     iy_pi = Ny // 2
@@ -227,55 +239,57 @@ def process_one_dir(run_path: str, out_prefix: str, vlim=None):
     ax.set_ylabel("y")
     cbar = fig.colorbar(sc, ax=ax, pad=0.02)
     fig.tight_layout()
-    fig.savefig(os.path.join(run_path, f"{out_prefix}_charge_corr_bubble.png"), dpi=200)
+    fig.savefig(os.path.join(run_path, f"{out_prefix}_spin_corr_bubble.png"), dpi=200)
     plt.close(fig)
 
     plt.figure(figsize=(5, 4))
     plt.imshow(C_stag_plot, origin="lower")
-    plt.colorbar(label=r"$(-1)^{x+y}[\langle n_0 n_r\rangle - \langle n\rangle^2]$")
+    plt.colorbar(label=r"$(-1)^{x+y}[\langle S_0^z S_r^z\rangle - \langle S^z\rangle^2]$")
     plt.xlabel("x")
     plt.ylabel("y")
     plt.xticks(np.arange(Nx), np.arange(Nx) - (Nx // 2))
     plt.yticks(np.arange(Ny), np.arange(Ny) - (Ny // 2))
-    plt.title("Average staggered charge correlation map")
+    plt.title("Average staggered spin correlation map")
     plt.tight_layout()
-    plt.savefig(os.path.join(run_path, f"{out_prefix}_charge_corr_stag.png"), dpi=200)
+    plt.savefig(os.path.join(run_path, f"{out_prefix}_spin_corr_stag.png"), dpi=200)
     plt.close()
 
     plt.figure(figsize=(5, 4))
     plt.imshow(C_map_plot, origin="lower")
-    plt.colorbar(label=r"$\langle n_0 n_r\rangle - \langle n\rangle^2$")
+    plt.colorbar(label=r"$\langle S_0^z S_r^z\rangle - \langle S^z\rangle^2$")
     plt.xlabel("x")
     plt.ylabel("y")
     plt.xticks(np.arange(Nx), np.arange(Nx) - (Nx // 2))
     plt.yticks(np.arange(Ny), np.arange(Ny) - (Ny // 2))
-    plt.title("Average charge correlation map")
+    plt.title("Average spin correlation map")
     plt.tight_layout()
-    plt.savefig(os.path.join(run_path, f"{out_prefix}_charge_corr.png"), dpi=200)
+    plt.savefig(os.path.join(run_path, f"{out_prefix}_spin_corr.png"), dpi=200)
     plt.close()
 
-    print(f"[ok] {run_path} T={T:.12g} beta={beta:.12g} S_cdw={S_cdw:.12g} err={S_cdw_err:.12g}")
+    print(f"[ok] {run_path} T={T:.12g} beta={beta:.12g} S_zz={S_zz:.12g} err={S_zz_err:.12g}")
     print("Saved:")
-    print(f"  {os.path.join(run_path, out_prefix + '_charge_corr.png')}")
-    print(f"  {os.path.join(run_path, out_prefix + '_charge_corr_stag.png')}")
-    print(f"  {os.path.join(run_path, out_prefix + '_charge_corr_bubble.png')}")
-    print(f"  {os.path.join(run_path, out_prefix + '_S_cdw_qspace.png')}")
-    print(f"  {os.path.join(run_path, out_prefix + '_S_cdw_qspace_mean.npy')}")
-    print(f"  {os.path.join(run_path, out_prefix + '_S_cdw_qspace_err.npy')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_spin_corr.png')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_spin_corr_stag.png')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_spin_corr_bubble.png')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_S_zz_qspace.png')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_S_zz_qspace_mean.npy')}")
+    print(f"  {os.path.join(run_path, out_prefix + '_S_zz_qspace_err.npy')}")
 
     return {
         "dir": run_path,
         "T": T,
         "beta": beta,
-        "S_cdw": S_cdw,
-        "S_cdw_err": S_cdw_err,
+        "S_zz": S_zz,
+        "S_zz_err": S_zz_err,
+        "chi_mean": chi_mean,
+        "chi_err": chi_err,
     }
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--path", required=True, help="Base directory, or a single directory containing HDF5 bin files")
     p.add_argument("--glob", default="T_*/", help="Glob pattern for subdirectories under --path, e.g. 'T*_beta*_U*/mu*'")
-    p.add_argument("--out_prefix", default="charge_order_avg", help="Output file prefix")
+    p.add_argument("--out_prefix", default="spin_order_avg", help="Output file prefix")
     p.add_argument("--vlim", type=float, default=None,
                    help="Symmetric color limit for bubble plot; default uses data max")
     args = p.parse_args()
@@ -296,17 +310,23 @@ def main():
 
     order = np.argsort(np.asarray([r["T"] for r in rows], dtype=float))
     T_arr = np.asarray([rows[i]["T"] for i in order], dtype=float)
-    S_arr = np.asarray([rows[i]["S_cdw"] for i in order], dtype=float)
-    S_err_arr = np.asarray([rows[i]["S_cdw_err"] for i in order], dtype=float)
+    S_arr = np.asarray([rows[i]["S_zz"] for i in order], dtype=float)
+    S_err_arr = np.asarray([rows[i]["S_zz_err"] for i in order], dtype=float)
+    chi_mean_arr = np.asarray([rows[i]["chi_mean"] for i in order], dtype=float)
+    chi_err_arr = np.asarray([rows[i]["chi_err"] for i in order], dtype=float)
 
-    np.save(os.path.join(base_path, f"{args.out_prefix}_S_cdw_T.npy"), T_arr)
-    np.save(os.path.join(base_path, f"{args.out_prefix}_S_cdw_mean.npy"), S_arr)
-    np.save(os.path.join(base_path, f"{args.out_prefix}_S_cdw_err.npy"), S_err_arr)
+    np.save(os.path.join(base_path, f"{args.out_prefix}_S_zz_T.npy"), T_arr)
+    np.save(os.path.join(base_path, f"{args.out_prefix}_S_zz_mean.npy"), S_arr)
+    np.save(os.path.join(base_path, f"{args.out_prefix}_S_zz_err.npy"), S_err_arr)
+    np.save(os.path.join(base_path, f"{args.out_prefix}_chi_mean.npy"), chi_mean_arr)
+    np.save(os.path.join(base_path, f"{args.out_prefix}_chi_err.npy"), chi_err_arr)
 
-    print("Saved S_cdw vs T arrays:")
-    print(f"  {os.path.join(base_path, args.out_prefix + '_S_cdw_T.npy')}")
-    print(f"  {os.path.join(base_path, args.out_prefix + '_S_cdw_mean.npy')}")
-    print(f"  {os.path.join(base_path, args.out_prefix + '_S_cdw_err.npy')}")
+    print("Saved S_zz vs T arrays:")
+    print(f"  {os.path.join(base_path, args.out_prefix + '_S_zz_T.npy')}")
+    print(f"  {os.path.join(base_path, args.out_prefix + '_S_zz_mean.npy')}")
+    print(f"  {os.path.join(base_path, args.out_prefix + '_S_zz_err.npy')}")
+    print(f"  {os.path.join(base_path, args.out_prefix + '_chi_mean.npy')}")
+    print(f"  {os.path.join(base_path, args.out_prefix + '_chi_err.npy')}")
 
 if __name__ == "__main__":
     main()

@@ -279,12 +279,16 @@ def main():
 
     # write summary
     sum_path = output_path / "summary.tsv"
-    with open(sum_path, "w") as f:
-        f.write("#B=%d dt_policy=%s dt_tgt=%g L_min=%d\n" % (B, args.dt_policy, args.dt_tgt, args.L_min))
-        f.write("T\tbeta\tL\tdt\tdir\tprefix\n")
+    summary_exists = sum_path.exists() and sum_path.stat().st_size > 0
+    mode = "a" if summary_exists else "w"
+    with open(sum_path, mode) as f:
+        if not summary_exists:
+            f.write("#B=%d dt_policy=%s dt_tgt=%g L_min=%d\n" % (B, args.dt_policy, args.dt_tgt, args.L_min))
+            f.write("T\tbeta\tL\tdt\tdir\tprefix\n")
         for T,beta,L,dt,sub,prefix in sorted(summary_rows, key=lambda r:r[0]):
             f.write(f"{T:.12g}\t{beta:.12g}\t{L}\t{dt:.12g}\t{sub}\t{prefix}\n")
-    print(f"[OK] wrote {sum_path}")
+    action = "appended to" if summary_exists else "wrote"
+    print(f"[OK] {action} {sum_path}")
     print("[DONE]")
 
 if __name__ == "__main__":
